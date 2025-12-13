@@ -136,6 +136,9 @@
         });
 
         btnCrank.onclick = () => {
+            // FIX: Don't play sound if already animating
+            if (scene.isCranking) return;
+
             // Play Sound
             crankSound.currentTime = 0;
             crankSound.play().catch(e => console.warn("Audio play failed", e));

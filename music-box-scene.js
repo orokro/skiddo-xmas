@@ -6,7 +6,7 @@ export class MusicBoxScene {
     constructor(options = {}) {
         this.onSceneReady = options.onSceneReady || (() => {});
         this.onMusicPlay = options.onMusicPlay || (() => {});
-        this.onReadyForPegs = options.onReadyForPegs || (() => {}); // New Callback
+        this.onReadyForPegs = options.onReadyForPegs || (() => {}); 
         this.initialScale = options.initialScale || 1.0;
 
         // State
@@ -101,17 +101,10 @@ export class MusicBoxScene {
         });
 
         manager.onLoad = () => {
-            console.log("ThreeJS Scene Loaded. Waiting 1s for stability...");
+            console.log("ThreeJS Scene Loaded.");
             this.isLoaded = true;
             this.state = 'IDLE';
-
-            setTimeout(() => {
-                console.log("Initializing Scene Data...");
-                // 1. Force the drum/gears to appear by running one frame update
-                this.handleFrameData({ time: 0, morphTargets: [] });
-                // 2. Now it is safe to fire the callback
-                this.onSceneReady();
-            }, 1000);
+            this.onSceneReady();
         };
     }
     
@@ -121,7 +114,6 @@ export class MusicBoxScene {
             return;
         }
 
-        // Cleanup old
         this.generatedPegs.forEach(p => {
             if (p.parent) p.parent.remove(p);
         });
@@ -137,11 +129,19 @@ export class MusicBoxScene {
             peg.visible = true; 
             peg.frustumCulled = false; 
             
+            // Fix Scale (Reset to 1, then apply original)
+            peg.scale.set(1, 1, 1);
+            peg.scale.copy(this.$.peg.scale);
+
             this.$.drum.add(peg);
 
-            // Position (Channel)
+            // Robust Positioning (Global -> Local)
+            const targetPos = new THREE.Vector3();
+            refKey.getWorldPosition(targetPos);
+            this.$.drum.worldToLocal(targetPos);
+
             peg.position.set(0, 0, 0); 
-            peg.position.x = refKey.position.x;
+            peg.position.x = targetPos.x;
 
             // Rotation (Time)
             const angle = note.normalizedStart * Math.PI * 2;
@@ -210,7 +210,6 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
 
-        // Force initial visibility
         const parts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
         parts.forEach(p => { 
             if(p) { 
@@ -323,14 +322,14 @@ export class MusicBoxScene {
                 }
             }
 
-            // --- TRIGGER POINT ---
+            // --- TRIGGER POINT: BUILD PEGS BEFORE LID OPENS ---
             if (progress >= 1.0) {
                 this.state = 'OPENING_LID';
                 
                 // 1. Force visual update for drum/gears
                 this.handleFrameData({ time: 0, morphTargets: [] });
                 
-                // 2. Build Pegs (New Callback)
+                // 2. Build Pegs
                 this.onReadyForPegs();
 
                 this.animStartTime = now;
