@@ -1,74 +1,167 @@
 // music-box-player.js
 
-// Note: Tone.js is loaded globally via CDN in the HTML, 
-// so we access it via 'window.Tone' or just 'Tone'.
-
 export class MusicBoxPlayer {
     constructor(options = {}) {
+        // How long the prong takes to lift before snapping (in seconds)
+        // 0.1s is a good mechanical "tick"
         this.rampDurationSeconds = options.rampTime || 0.1; 
         
         this.songData = null;
         this.totalDuration = 0;
-        this.notes = [];
-        this.keys = [];
+        
+        this.notes = []; // The processed notes ready for playback
+        this.keys = [];  // The final list of 18 keys (strings)
+        
         this.isPlaying = false;
         this.rafId = null;
         this.onPlayDataCallback = null;
 
-        // --- THE SOUND UPGRADE ---
-        // We use a Sampler instead of a Synth.
-        // It maps a specific note (C4) to a file. 
-        // Tone.js automatically repitches it for other keys!
+        // --- AUDIO SETUP ---
+        // Use Tone.Sampler for realistic sound
         this.sampler = new Tone.Sampler({
             urls: {
-                C4: "assets/C4.wav", // Make sure this file exists!
+                C4: "assets/C4.wav", // Ensure this file exists in /assets/
             },
-            // A nice release ensures the bell rings out even if the note duration is short
             release: 1, 
-            
-            // This handles the "loading" callback
             onload: () => {
-                console.log("Sampler loaded C4.wav successfully!");
+                console.log("MusicBox Sampler Loaded.");
             }
         }).toDestination();
 
-        // Music boxes are usually quiet, boost volume if needed
         this.sampler.volume.value = -5;
     }
 
     /**
-     * Loads the song object
+     * Loads the song object and performs collision detection/channel duplication
+     * options: { collisionThreshold: 0.3 } (seconds)
      */
-    async load(songObj) {
+    async load(songObj, loadOptions = {}) {
         this.stop();
 
-        this.keys = songObj.keys;
+        // --- CONFIGURATION ---
+        // Minimum time required between notes on the same channel
+        // Real music boxes need about 0.3s - 0.5s to reset the prong vibration
+        const threshold = loadOptions.collisionThreshold || 0.3; 
+        const maxChannels = 18;
         const speedMultiplier = songObj.speed || 1.0;
 
-        // Calculate Scale and Duration
-        let maxEndTime = 0;
-        
-        this.notes = songObj.notes.map(n => {
-            const scaledStart = n.startTime / speedMultiplier;
-            const scaledEnd = n.endTime / speedMultiplier;
+        console.log(`Analyzing song for mechanical collisions (Threshold: ${threshold}s)...`);
+
+        // --- STEP 1: NORMALIZE TIME ---
+        // Create a temporary list of notes with calculated times
+        // We sort by start time to make linear scanning easier
+        let tempNotes = songObj.notes.map(n => ({
+            ...n,
+            scaledStart: n.startTime / speedMultiplier,
+            scaledEnd: n.endTime / speedMultiplier,
+            originalKeyIndex: n.key // Store the old index (0-17)
+        })).sort((a, b) => a.scaledStart - b.scaledStart);
+
+        // --- STEP 2: DETECT COLLISIONS ---
+        const collisionsPerKey = {}; // { originalKeyIndex: count }
+        const lastTimePerKey = {};   // { originalKeyIndex: lastEndTime }
+
+        tempNotes.forEach(n => {
+            const k = n.originalKeyIndex;
+            const lastStart = lastTimePerKey[k];
             
-            if (scaledEnd > maxEndTime) maxEndTime = scaledEnd;
+            if (lastStart !== undefined) {
+                // Check if the gap is too small
+                const timeDiff = n.scaledStart - lastStart;
+                if (timeDiff < threshold) {
+                    collisionsPerKey[k] = (collisionsPerKey[k] || 0) + 1;
+                }
+            }
+            lastTimePerKey[k] = n.scaledStart;
+        });
+
+        // --- STEP 3: PRIORITIZE DUPLICATION ---
+        const originalKeys = songObj.keys;
+        let slotsAvailable = maxChannels - originalKeys.length;
+        const keysToDuplicate = new Set(); 
+
+        if (slotsAvailable > 0) {
+            // Sort keys by most collisions first
+            const sortedCollisions = Object.entries(collisionsPerKey)
+                .sort(([, countA], [, countB]) => countB - countA);
+
+            for (let [keyIndexStr, count] of sortedCollisions) {
+                if (slotsAvailable <= 0) break;
+                
+                const keyIndex = parseInt(keyIndexStr);
+                console.log(`Key "${originalKeys[keyIndex]}" has ${count} collisions. allocating twin channel.`);
+                
+                keysToDuplicate.add(keyIndex);
+                slotsAvailable--;
+            }
+        } else {
+            const totalCollisions = Object.values(collisionsPerKey).reduce((a, b) => a + b, 0);
+            if(totalCollisions > 0) {
+                console.warn(`Comb full (18/18). ${totalCollisions} collisions will remain unresolved.`);
+            }
+        }
+
+        // --- STEP 4: REBUILD KEYS (PRONGS) ---
+        // We must preserve pitch order. If C4 is duplicated, we want [..., "C4", "C4", ...]
+        const newKeys = [];
+        const keyMapping = {}; // oldIndex -> [newIndex1, newIndex2]
+
+        originalKeys.forEach((pitch, oldIndex) => {
+            // 1. Add the primary channel
+            const newIndex1 = newKeys.length;
+            newKeys.push(pitch);
+            
+            // Initialize the map
+            keyMapping[oldIndex] = [newIndex1];
+
+            // 2. If flagged for duplication, add the twin immediately after
+            if (keysToDuplicate.has(oldIndex)) {
+                const newIndex2 = newKeys.length;
+                newKeys.push(pitch);
+                keyMapping[oldIndex].push(newIndex2);
+            }
+        });
+
+        // Save the final hardware configuration
+        this.keys = newKeys;
+        console.log(`Final Comb Layout: ${this.keys.length} prongs.`);
+
+        // --- STEP 5: ASSIGN NOTES TO CHANNELS ---
+        // We round-robin (alternate) the notes for duplicated channels
+        const nextChannelToggle = {}; // oldIndex -> 0 or 1
+        
+        let maxEndTime = 0;
+
+        this.notes = tempNotes.map(n => {
+            const oldKey = n.originalKeyIndex;
+            const targetChannels = keyMapping[oldKey];
+            
+            let finalKeyIndex;
+
+            if (targetChannels.length === 1) {
+                finalKeyIndex = targetChannels[0];
+            } else {
+                // Alternate between the available twins
+                const toggle = nextChannelToggle[oldKey] || 0;
+                finalKeyIndex = targetChannels[toggle];
+                
+                // Flip for next time
+                nextChannelToggle[oldKey] = (toggle + 1) % targetChannels.length;
+            }
+
+            if (n.scaledEnd > maxEndTime) maxEndTime = n.scaledEnd;
 
             return {
-                ...n,
-                scaledStart: scaledStart,
-                scaledEnd: scaledEnd,
-                // Tone.js duration
-                scaledDuration: scaledEnd - scaledStart,
-                // Map the key index to the actual pitch string (e.g. "C4")
-                pitch: this.keys[n.key] 
+                ...n, // keeps startTime, endTime, etc
+                key: finalKeyIndex, // The NEW key index (0-17)
+                pitch: this.keys[finalKeyIndex],
+                scaledDuration: n.scaledEnd - n.scaledStart
             };
         });
 
-        this.totalDuration = maxEndTime + 2.0; 
-        console.log(`Song loaded: ${this.totalDuration.toFixed(2)}s`);
+        this.totalDuration = maxEndTime + 2.0;
 
-        // Schedule Tone.js
+        // --- STEP 6: SCHEDULE AUDIO ---
         Tone.Transport.cancel();
         Tone.Transport.loop = true;
         Tone.Transport.loopStart = 0;
@@ -76,11 +169,7 @@ export class MusicBoxPlayer {
 
         this.notes.forEach(note => {
             Tone.Transport.schedule((time) => {
-                // Trigger the sample
-                // We use a fixed duration or let the sample ring out?
-                // Usually triggerAttack is better for samples if we want them to ring naturally,
-                // but triggerAttackRelease works if we want to choke them (not typical for music box).
-                // Let's use triggerAttackRelease but with a long release in the constructor.
+                // Trigger Sample
                 this.sampler.triggerAttackRelease(note.pitch, 1.0, time);
             }, note.scaledStart);
         });
@@ -88,13 +177,9 @@ export class MusicBoxPlayer {
 
     async play() {
         if (!this.notes.length) return;
-        await Tone.start();
         
-        // Ensure sampler is loaded before playing to avoid silence
-        if(!this.sampler.loaded) {
-            console.log("Waiting for sample to load...");
-            await Tone.loaded();
-        }
+        await Tone.start();
+        if(!this.sampler.loaded) await Tone.loaded();
 
         Tone.Transport.start();
         this.isPlaying = true;
