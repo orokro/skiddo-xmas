@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js'; // Brought back!
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export class MusicBoxScene {
@@ -40,7 +41,7 @@ export class MusicBoxScene {
         this.renderer.setSize(mount.clientWidth, mount.clientHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.2; 
+        this.renderer.toneMappingExposure = 1.0; // Reset exposure slightly for HDR
         this.renderer.outputEncoding = THREE.sRGBEncoding;
         mount.appendChild(this.renderer.domElement);
 
@@ -49,7 +50,8 @@ export class MusicBoxScene {
         this.camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
         this.camera.position.set(0, 1, 5);
 
-        const ambient = new THREE.AmbientLight(0xffffff, 0.8); 
+        // Lights (HDR handles most reflections, these are just for shadows/fill)
+        const ambient = new THREE.AmbientLight(0xffffff, 0.5); 
         this.scene.add(ambient);
         
         const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -70,11 +72,12 @@ export class MusicBoxScene {
     async _loadAssets() {
         const manager = new THREE.LoadingManager();
         
-        const texLoader = new THREE.TextureLoader(manager);
-        texLoader.load('assets/Basic_2K_01.jpg', (texture) => {
+        // --- SWITCH TO RGBELoader FOR HDR ---
+        const rgbeLoader = new RGBELoader(manager);
+        rgbeLoader.load('assets/venice_sunset_2k.hdr', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
-            texture.colorSpace = THREE.SRGBColorSpace;
             this.scene.environment = texture;
+            // texture.dispose(); // Keep it in memory for the scene environment
         });
 
         const gltfLoader = new GLTFLoader(manager);
@@ -86,7 +89,9 @@ export class MusicBoxScene {
                 if (obj.isMesh) {
                     obj.frustumCulled = false;
                     if (obj.material.isMeshStandardMaterial) {
-                        obj.material.envMapIntensity = 4.0; 
+                        // Reset Intensity! 
+                        // HDRs are bright. 4.0 would be nuclear. 1.0 is physically correct.
+                        obj.material.envMapIntensity = 1.0; 
                     }
                     obj.castShadow = true;
                     obj.receiveShadow = true;
@@ -231,8 +236,7 @@ export class MusicBoxScene {
             }
             
             if (plane.material) {
-                // *** CRITICAL FIX: CLONE MATERIAL ***
-                // This ensures every card has its own opacity state
+                // CLONE MATERIAL for unique opacity
                 plane.material = plane.material.clone();
 
                 plane.material.transparent = true;
