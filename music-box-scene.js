@@ -1,14 +1,19 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js'; // Brought back!
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export class MusicBoxScene {
     constructor(options = {}) {
         this.onSceneReady = options.onSceneReady || (() => {});
         this.onMusicPlay = options.onMusicPlay || (() => {});
+        this.onMusicPause = options.onMusicPause || (() => {}); 
         this.onReadyForPegs = options.onReadyForPegs || (() => {}); 
         this.initialScale = options.initialScale || 1.0;
+
+        // URL Params
+        const urlParams = new URLSearchParams(window.location.search);
+        this.autoOpen = urlParams.get('autoOpen') === 'true';
 
         // State
         this.$ = {}; 
@@ -20,6 +25,7 @@ export class MusicBoxScene {
         this.isCranking = false;
         this.crankTargetRot = 0;
         
+        // Animation States
         this.state = 'LOADING'; 
         this.animStartTime = 0;
         this.playStartTime = 0;
@@ -41,7 +47,7 @@ export class MusicBoxScene {
         this.renderer.setSize(mount.clientWidth, mount.clientHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 1.0; // Reset exposure slightly for HDR
+        this.renderer.toneMappingExposure = 1.0; 
         this.renderer.outputEncoding = THREE.sRGBEncoding;
         mount.appendChild(this.renderer.domElement);
 
@@ -50,7 +56,6 @@ export class MusicBoxScene {
         this.camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
         this.camera.position.set(0, 1, 5);
 
-        // Lights (HDR handles most reflections, these are just for shadows/fill)
         const ambient = new THREE.AmbientLight(0xffffff, 0.5); 
         this.scene.add(ambient);
         
@@ -59,6 +64,7 @@ export class MusicBoxScene {
         this.scene.add(dirLight);
 
         this._loadAssets();
+        this._setupSwipeInteraction(); 
 
         window.addEventListener('resize', () => {
             this.camera.aspect = mount.clientWidth / mount.clientHeight;
@@ -69,15 +75,64 @@ export class MusicBoxScene {
         this._tick();
     }
 
+    // --- INTERACTION ---
+
+    // Public method for UI button
+    toggle() {
+        if (this.state === 'PLAYING') {
+            this._triggerClose();
+        } else if (this.state === 'PAUSED' || this.state === 'WAIT_FOR_OPEN' || this.state === 'WAIT_DELAY') {
+            // Force peg build if we skipped the normal flow
+            if (this.generatedPegs.length === 0) {
+                 this.onReadyForPegs();
+            }
+            // Hide swipe UI if we toggled manually
+            const zone = document.getElementById('swipe-zone');
+            if(zone) zone.style.display = 'none';
+
+            this._triggerOpen();
+        }
+    }
+
+    _setupSwipeInteraction() {
+        const swipeZone = document.getElementById('swipe-zone');
+        let startY = 0;
+
+        const onStart = (y) => { startY = y; };
+        const onEnd = (y) => {
+            if (this.state !== 'WAIT_FOR_OPEN') return;
+            const deltaY = startY - y; 
+            if (deltaY > 50) { 
+                swipeZone.style.display = 'none';
+                this._triggerOpen();
+            }
+        };
+
+        swipeZone.addEventListener('mousedown', (e) => onStart(e.clientY));
+        swipeZone.addEventListener('touchstart', (e) => onStart(e.touches[0].clientY));
+        
+        window.addEventListener('mouseup', (e) => onEnd(e.clientY));
+        window.addEventListener('touchend', (e) => onEnd(e.changedTouches[0].clientY));
+    }
+
+    _triggerOpen() {
+        this.state = 'OPENING_LID';
+        this.animStartTime = performance.now();
+    }
+
+    _triggerClose() {
+        this.state = 'CLOSING_LID';
+        this.animStartTime = performance.now();
+        this.onMusicPause();
+    }
+
     async _loadAssets() {
         const manager = new THREE.LoadingManager();
         
-        // --- SWITCH TO RGBELoader FOR HDR ---
         const rgbeLoader = new RGBELoader(manager);
         rgbeLoader.load('assets/venice_sunset_2k.hdr', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
             this.scene.environment = texture;
-            // texture.dispose(); // Keep it in memory for the scene environment
         });
 
         const gltfLoader = new GLTFLoader(manager);
@@ -89,8 +144,6 @@ export class MusicBoxScene {
                 if (obj.isMesh) {
                     obj.frustumCulled = false;
                     if (obj.material.isMeshStandardMaterial) {
-                        // Reset Intensity! 
-                        // HDRs are bright. 4.0 would be nuclear. 1.0 is physically correct.
                         obj.material.envMapIntensity = 1.0; 
                     }
                     obj.castShadow = true;
@@ -99,18 +152,16 @@ export class MusicBoxScene {
             });
 
             this.scene.add(this.model);
-            
             this._loadAndCacheAssetRefs(this.model);
             this._initObjectStates();
         });
 
         manager.onLoad = () => {
-            console.log("ThreeJS Scene Loaded. Waiting 1s for stability...");
+            console.log("ThreeJS Scene Loaded.");
             this.isLoaded = true;
             this.state = 'IDLE';
 
             setTimeout(() => {
-                console.log("Initializing Scene Data...");
                 this.handleFrameData({ time: 0, morphTargets: [] });
                 this.onSceneReady();
             }, 1000);
@@ -118,17 +169,10 @@ export class MusicBoxScene {
     }
     
     buildPegs(songData) {
-        if (!this.$.drum || !this.$.peg) {
-            console.error("BuildPegs Failed: Drum or Peg asset missing.");
-            return;
-        }
+        if (!this.$.drum || !this.$.peg) return;
 
-        this.generatedPegs.forEach(p => {
-            if (p.parent) p.parent.remove(p);
-        });
+        this.generatedPegs.forEach(p => { if (p.parent) p.parent.remove(p); });
         this.generatedPegs = [];
-
-        console.log(`Building 3D Pegs for ${songData.length} notes...`);
 
         songData.forEach((note) => {
             const refKey = this.$.refKeys[note.keyIndex];
@@ -156,8 +200,6 @@ export class MusicBoxScene {
             peg.updateMatrix();
             this.generatedPegs.push(peg);
         });
-        
-        console.log(`Successfully spawned ${this.generatedPegs.length} pegs.`);
     }
 
     _loadAndCacheAssetRefs(root) {
@@ -183,9 +225,7 @@ export class MusicBoxScene {
                     case 'FlyWeight':   this.$.flyWeight = obj; break;
                     case 'Responses':   
                         obj.traverse((child) => {
-                            if (child.isMesh) {
-                                this.responsePlanes.push(child);
-                            }
+                            if (child.isMesh) this.responsePlanes.push(child);
                         });
                         break;
                 }
@@ -199,12 +239,7 @@ export class MusicBoxScene {
 
     _initObjectStates() {
         if (this.$.blackoutWall) {
-            this.$.blackoutWall.material = new THREE.MeshBasicMaterial({
-                color: 0x000000,
-                transparent: true,
-                opacity: 1.0,
-                depthWrite: false
-            });
+            this.$.blackoutWall.material = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 1.0, depthWrite: false });
             this.$.blackoutWall.visible = true;
         }
 
@@ -226,24 +261,16 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
         
-        // --- FIX RESPONSE PLANES ---
         this.responsePlanes.forEach(plane => {
             plane.renderOrder = 999;
             plane.frustumCulled = false;
-
-            if (plane.geometry) {
-                plane.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
-            }
-            
+            if (plane.geometry) plane.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
             if (plane.material) {
-                // CLONE MATERIAL for unique opacity
                 plane.material = plane.material.clone();
-
                 plane.material.transparent = true;
                 plane.material.opacity = 0.0; 
                 plane.material.side = THREE.DoubleSide; 
                 plane.material.depthWrite = false; 
-                
                 plane.material.polygonOffset = true;
                 plane.material.polygonOffsetFactor = -1.0;
                 plane.material.polygonOffsetUnits = -1.0;
@@ -253,18 +280,12 @@ export class MusicBoxScene {
 
         const parts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
         parts.forEach(p => { 
-            if(p) { 
-                p.visible = true; 
-                p.frustumCulled = false;
-                p.updateMatrix(); 
-            } 
+            if(p) { p.visible = true; p.frustumCulled = false; p.updateMatrix(); } 
         });
 
         if (this.$.peg) this.$.peg.visible = false;
         
-        if (this.$.windKey) {
-            this.crankTargetRot = this.$.windKey.rotation.z; 
-        }
+        if (this.$.windKey) this.crankTargetRot = this.$.windKey.rotation.z; 
 
         if (this.$.refStartPos && this.$.refFocus) {
             const startVec = new THREE.Vector3();
@@ -322,19 +343,17 @@ export class MusicBoxScene {
         
         if (this.state === 'IDLE' || this.state === 'LOADING') return;
 
+        // --- STATE MACHINE ---
+
         if (this.state === 'FADING_WALL') {
             const elapsed = (now - this.animStartTime) / 1000;
-            const duration = 1.0;
-            let progress = elapsed / duration;
-            if (progress > 1.0) progress = 1.0;
+            const progress = Math.min(elapsed / 1.0, 1.0);
 
-            if (this.$.blackoutWall) {
-                this.$.blackoutWall.material.opacity = 1.0 - progress;
-                if (progress >= 1.0) this.$.blackoutWall.visible = false;
-            }
+            if (this.$.blackoutWall) this.$.blackoutWall.material.opacity = 1.0 - progress;
             if (this.$.tableCloth) this.$.tableCloth.material.opacity = progress;
 
             if (progress >= 1.0) {
+                if (this.$.blackoutWall) this.$.blackoutWall.visible = false;
                 this.state = 'CAMERA_MOVE';
                 this.animStartTime = now;
                 this._initCameraLerpValues();
@@ -343,38 +362,58 @@ export class MusicBoxScene {
 
         else if (this.state === 'CAMERA_MOVE') {
             if (!this.camLerp) this._initCameraLerpValues();
-
             const elapsed = (now - this.animStartTime) / 1000;
-            const duration = 5.0; 
-            const progress = Math.min(elapsed / duration, 1.0);
-            
+            const progress = Math.min(elapsed / 5.0, 1.0);
             const t = 1 - Math.pow(1 - progress, 3);
 
             this._updateCameraLerp(t);
 
             if (this.$.wall && this.$.wall.material) {
-                const fadeStart = 0.1;
-                const fadeEnd = 0.5;
+                const fadeStart = 0.1; const fadeEnd = 0.5;
                 if (progress >= fadeStart) {
-                    let wallOpacity = (progress - fadeStart) / (fadeEnd - fadeStart);
-                    wallOpacity = Math.min(Math.max(wallOpacity, 0), 1);
-                    this.$.wall.material.opacity = wallOpacity;
+                    let op = (progress - fadeStart) / (fadeEnd - fadeStart);
+                    this.$.wall.material.opacity = Math.min(Math.max(op, 0), 1);
                 }
             }
 
             if (progress >= 1.0) {
-                this.state = 'OPENING_LID';
                 this.handleFrameData({ time: 0, morphTargets: [] });
-                this.onReadyForPegs();
-                this.animStartTime = now;
-                this._enableControls();
+                // We DON'T toggle open here yet, we wait for swipe/auto
+                
+                if (this.autoOpen) {
+                    // Auto: Go straight to open
+                    this.onReadyForPegs(); // Build pegs now
+                    this.state = 'OPENING_LID';
+                    this.animStartTime = now;
+                    this._enableControls();
+                } else {
+                    // Manual: Wait a sec, then enable swipe UI
+                    this.state = 'WAIT_DELAY';
+                    this.animStartTime = now; 
+                }
             }
+        }
+
+        else if (this.state === 'WAIT_DELAY') {
+             const elapsed = (now - this.animStartTime) / 1000;
+             if (elapsed > 1.0) {
+                 this.state = 'WAIT_FOR_OPEN';
+                 this._enableControls();
+                 // Show Swipe Prompt
+                 const zone = document.getElementById('swipe-zone');
+                 if(zone) zone.style.display = 'block';
+                 // We build pegs now so they are ready when user swipes
+                 this.onReadyForPegs();
+             }
+        }
+
+        else if (this.state === 'WAIT_FOR_OPEN') {
+            // Waiting for swipe interaction...
         }
 
         else if (this.state === 'OPENING_LID') {
             const elapsed = (now - this.animStartTime) / 1000;
-            const duration = 1.0;
-            const progress = Math.min(elapsed / duration, 1.0);
+            const progress = Math.min(elapsed / 1.0, 1.0);
             const t = progress * progress * (3 - 2 * progress);
 
             if (this.$.boxLid) {
@@ -384,20 +423,33 @@ export class MusicBoxScene {
             if (progress >= 1.0) {
                 this.state = 'PLAYING';
                 this.onMusicPlay();
-                this.playStartTime = now;
+                // Reset play timer if we are starting fresh
+                if (this.playStartTime === 0) this.playStartTime = now;
             }
         }
         
+        else if (this.state === 'CLOSING_LID') {
+            const elapsed = (now - this.animStartTime) / 1000;
+            const progress = Math.min(elapsed / 1.0, 1.0);
+            const t = progress * progress * (3 - 2 * progress);
+
+            if (this.$.boxLid) {
+                this.$.boxLid.rotation.x = THREE.MathUtils.lerp(-Math.PI/2, 0, t);
+            }
+
+            if (progress >= 1.0) {
+                this.state = 'PAUSED';
+            }
+        }
+
         else if (this.state === 'PLAYING') {
             const timeSincePlay = (now - this.playStartTime) / 1000;
-            const fadeDuration = 1.0;
-            const interval = 3.0; // 1s fade + 2s pause
+            const interval = 3.0; 
             
             this.responsePlanes.forEach((plane, index) => {
                 const startDelay = index * interval;
-                
                 if (timeSincePlay > startDelay) {
-                    let op = (timeSincePlay - startDelay) / fadeDuration;
+                    let op = (timeSincePlay - startDelay) / 1.0; 
                     op = Math.min(Math.max(op, 0), 1);
                     if(plane.material) plane.material.opacity = op;
                 }
@@ -441,60 +493,39 @@ export class MusicBoxScene {
             focusEnd.copy(focusStart);
         }
 
-        this.camLerp = { 
-            start: startPos, 
-            end: endPos, 
-            focusStart: focusStart,
-            focusEnd: focusEnd 
-        };
+        this.camLerp = { start: startPos, end: endPos, focusStart: focusStart, focusEnd: focusEnd };
     }
 
     _updateCameraLerp(t) {
         const vStart = new THREE.Vector3().subVectors(this.camLerp.start, this.camLerp.focusStart);
         const vEnd = new THREE.Vector3().subVectors(this.camLerp.end, this.camLerp.focusStart);
-        
-        const startDist = vStart.length();
-        const endDist = vEnd.length();
-        const currentDist = THREE.MathUtils.lerp(startDist, endDist, t);
-        
-        const vCurrent = new THREE.Vector3().lerpVectors(vStart, vEnd, t).normalize();
-        vCurrent.multiplyScalar(currentDist);
-        
+        const currentDist = THREE.MathUtils.lerp(vStart.length(), vEnd.length(), t);
+        const vCurrent = new THREE.Vector3().lerpVectors(vStart, vEnd, t).normalize().multiplyScalar(currentDist);
         const finalPos = vCurrent.add(this.camLerp.focusStart);
-        this.camera.position.copy(finalPos);
-
-        const currentLookAt = new THREE.Vector3().lerpVectors(
-            this.camLerp.focusStart, 
-            this.camLerp.focusEnd, 
-            t
-        );
         
-        this.camera.lookAt(currentLookAt);
+        this.camera.position.copy(finalPos);
+        this.camera.lookAt(new THREE.Vector3().lerpVectors(this.camLerp.focusStart, this.camLerp.focusEnd, t));
     }
 
     _enableControls() {
+        if (this.controls) { 
+            this.controls.enabled = true; 
+            return;
+        }
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
 
-        // --- CAMERA LIMITS ---
-        // Horizontal: -1.7 (Left) to 1.7 (Right)
         this.controls.minAzimuthAngle = -1.7;
         this.controls.maxAzimuthAngle = 1.7;
-
-        // Vertical: 0 (Top-down) to 1.5 (Almost horizon level)
         this.controls.minPolarAngle = 0;
         this.controls.maxPolarAngle = 1.5;
-        // ---------------------
         
-        if (this.$.refFocusEnd) {
-            const focusVec = new THREE.Vector3();
-            this.$.refFocusEnd.getWorldPosition(focusVec);
-            this.controls.target.copy(focusVec);
-        } else if (this.$.refFocus) {
-            const focusVec = new THREE.Vector3();
-            this.$.refFocus.getWorldPosition(focusVec);
-            this.controls.target.copy(focusVec);
+        const target = this.$.refFocusEnd ? this.$.refFocusEnd : this.$.refFocus;
+        if(target) {
+            const v = new THREE.Vector3();
+            target.getWorldPosition(v);
+            this.controls.target.copy(v);
         }
     }
 }

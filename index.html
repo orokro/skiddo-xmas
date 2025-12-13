@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Merry Xmas</title>
+    <title>3D Music Box Experience</title>
     <script type="importmap">
         {
             "imports": {
@@ -14,16 +14,14 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; user-select: none; }
         #threeJSMount { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         
         #btn-crank {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 300px; 
-            height: 300px;
+            width: 300px; height: 300px;
             border-radius: 50%;
             background: rgba(255, 0, 0, 0.0);
             border: none;
@@ -32,10 +30,88 @@
         }
         #btn-crank:active { cursor: grabbing; }
 
+        /* Full Screen Swipe Zone */
+        #swipe-zone {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 15;
+            display: none; /* Hidden by default */
+            cursor: n-resize;
+            /* Background gradient to hint at interaction */
+            background: linear-gradient(to top, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 20%);
+        }
+
+        #swipe-arrow {
+            position: absolute;
+            bottom: 40px; left: 50%;
+            transform: translateX(-50%);
+            width: 0; height: 0; 
+            border-left: 20px solid transparent;
+            border-right: 20px solid transparent;
+            border-bottom: 30px solid rgba(255, 255, 255, 0.8);
+            animation: floatUp 1.5s infinite;
+            pointer-events: none;
+        }
+        
+        #swipe-text {
+            position: absolute;
+            bottom: 15px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.8);
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+            text-transform: uppercase;
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+
+        @keyframes floatUp {
+            0% { transform: translateX(-50%) translateY(0); opacity: 0; }
+            50% { opacity: 1; }
+            100% { transform: translateX(-50%) translateY(-40px); opacity: 0; }
+        }
+
+        /* Bottom Right Controls */
+        #controls-box {
+            position: absolute;
+            bottom: 20px; right: 20px;
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #ccc;
+            font-size: 12px;
+            text-align: right;
+            display: none; /* Hidden until open */
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+
+        .instruction { margin-bottom: 10px; line-height: 1.4; }
+        .mouse-icon { font-weight: bold; color: #fff; }
+
+        #btn-toggle {
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: bold;
+            background: #444;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        #btn-toggle:hover { background: #666; }
+
+        /* CTA Top Right */
         #btn-cta {
             position: absolute;
-            top: 20px;
-            right: 20px;
+            top: 20px; right: 20px;
             z-index: 20;
             padding: 15px 30px;
             font-size: 18px;
@@ -49,12 +125,7 @@
             display: none; 
             animation: bounce 2s infinite;
         }
-
-        #btn-cta:hover {
-            background: #ffe066;
-            transform: scale(1.05);
-        }
-
+        #btn-cta:hover { background: #ffe066; transform: scale(1.05); }
         @keyframes bounce {
             0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
             40% {transform: translateY(-10px);}
@@ -68,6 +139,19 @@
     
     <button id="btn-crank" disabled title="Click to wind"></button>
 
+    <div id="swipe-zone">
+        <div id="swipe-arrow"></div>
+        <div id="swipe-text">Swipe Up to Open</div>
+    </div>
+
+    <div id="controls-box">
+        <div class="instruction">
+            <span class="mouse-icon">Left Click + Drag</span> to Rotate<br>
+            <span class="mouse-icon">Right Click + Drag</span> to Move
+        </div>
+        <button id="btn-toggle">Pause / Close Box</button>
+    </div>
+
     <button id="btn-cta" onclick="window.open('https://docs.google.com/forms/d/e/1FAIpQLSeVzeCcr0QLzOJYrj0ry6SfyE1XufCeUx-PEW1oJc5t8ivHqA/viewform?usp=dialog', '_blank')">
         Add your response to skiddo!
     </button>
@@ -78,54 +162,37 @@
 
         const crankSound = new Audio('assets/crank.wav');
 
-        // --- 1. PROCESSED SONG DATA (Gymnopédie-ish) ---
+        // --- 1. SONG DATA (Gymnopédie-ish) ---
         // Range: G3 (0) to C6 (17)
         // keys: ["G3","A3","B3","C4","D4","E4","F4","G4","A4","B4","C5","D5","E5","F5","G5","A5","B5","C6"]
         
-        // This data is normalized to the 18-note scale logic
         const rawNotes = [
-            // CHORD 1 (C Major 7)
-            {t:0.0, k:3}, {t:0.0, k:5}, {t:0.0, k:7}, {t:0.0, k:9}, {t:0.0, k:11}, // C4, E4, G4, B4, D5
-            // MELODY
+            {t:0.0, k:3}, {t:0.0, k:5}, {t:0.0, k:7}, {t:0.0, k:9}, {t:0.0, k:11}, 
             {t:0.0, k:11}, {t:0.51, k:11}, {t:1.02, k:11}, {t:1.54, k:11}, {t:2.05, k:11}, 
-            {t:2.74, k:8}, // A4
-            // BASS
-            {t:2.74, k:0}, {t:2.74, k:2}, {t:2.74, k:4}, {t:2.74, k:6}, {t:2.74, k:8}, // G3 B3 D4 F4(mapped) A4
+            {t:2.74, k:8}, 
+            {t:2.74, k:0}, {t:2.74, k:2}, {t:2.74, k:4}, {t:2.74, k:6}, {t:2.74, k:8},
             {t:3.25, k:8}, {t:3.77, k:8}, {t:4.28, k:8}, {t:4.80, k:8}, 
             {t:5.14, k:8}, {t:5.48, k:11}, 
-            
-            // CHORD 2 
             {t:5.48, k:3}, {t:5.48, k:5}, {t:5.48, k:7}, {t:5.48, k:9}, {t:5.48, k:11},
             {t:6.0, k:11}, {t:6.51, k:11}, {t:7.02, k:11}, {t:7.54, k:11}, {t:7.88, k:11},
             {t:8.22, k:8},
-            
-            // BASS 2
             {t:8.22, k:0}, {t:8.22, k:2}, {t:8.22, k:4}, {t:8.22, k:6}, {t:8.22, k:8},
             {t:8.74, k:8}, {t:9.25, k:8}, {t:9.77, k:8}, {t:10.28, k:8}, {t:10.62, k:8},
-
-            // TRANSITION / VARIATION
-            {t:10.97, k:3}, {t:10.97, k:5}, {t:10.97, k:7}, {t:10.97, k:9}, {t:10.97, k:11}, // Chord
+            {t:10.97, k:3}, {t:10.97, k:5}, {t:10.97, k:7}, {t:10.97, k:9}, {t:10.97, k:11},
             {t:10.97, k:11}, {t:11.48, k:11}, {t:12.0, k:11}, {t:12.51, k:11}, {t:13.02, k:11}, 
             {t:13.37, k:11}, {t:13.71, k:8},
-
-            // BASS 3
             {t:13.71, k:0}, {t:13.71, k:2}, {t:13.71, k:4}, {t:13.71, k:6}, {t:13.71, k:8},
             {t:14.22, k:8}, {t:14.74, k:8}, {t:15.25, k:8}, {t:15.77, k:8}, {t:16.11, k:8},
-
-            // RESOLVE
-            {t:16.45, k:3}, {t:16.45, k:5}, {t:16.45, k:7}, {t:16.45, k:9}, {t:16.45, k:11}, // Chord
+            {t:16.45, k:3}, {t:16.45, k:5}, {t:16.45, k:7}, {t:16.45, k:9}, {t:16.45, k:11}, 
             {t:16.45, k:11}, {t:16.97, k:11}, {t:17.48, k:11}, {t:18.0, k:11}, {t:18.51, k:11},
             {t:18.85, k:11}, {t:19.2, k:8},
-            
-            // OUTRO
             {t:19.2, k:0}, {t:19.2, k:2}, {t:19.2, k:4}, {t:19.2, k:6}, {t:19.2, k:8},
             {t:19.71, k:8}, {t:20.22, k:8}, {t:20.74, k:8}, {t:21.25, k:8}, {t:21.6, k:7}
         ];
 
-        // Convert short format to full object
         const fullNotes = rawNotes.map(n => ({
             startTime: n.t,
-            endTime: n.t + 1.5, // Sustain chords
+            endTime: n.t + 1.5,
             key: n.k
         }));
 
@@ -133,7 +200,7 @@
         
         const song = { 
             songName: "Atmospheric Memory", 
-            speed: 1, // Slow it down to feel like a real music box (Original was 175bpm!)
+            speed: 1, 
             keys: keys, 
             notes: fullNotes 
         };
@@ -143,6 +210,8 @@
         const player = new MusicBoxPlayer({ rampTime: 0.1 }); 
         const btnCrank = document.getElementById('btn-crank');
         const btnCTA = document.getElementById('btn-cta');
+        const controlsBox = document.getElementById('controls-box');
+        const btnToggle = document.getElementById('btn-toggle');
 
         const scene = new MusicBoxScene({
             initialScale: 1.0, 
@@ -150,8 +219,6 @@
             onSceneReady: () => {
                 console.log("Scene Ready.");
                 btnCrank.disabled = false; 
-                
-                // Load song (Collision threshold is critical here for the chords)
                 player.load(song, { collisionThreshold: 0.2 });
             },
 
@@ -163,7 +230,15 @@
             onMusicPlay: () => {
                 btnCrank.style.display = 'none'; 
                 btnCTA.style.display = 'block'; 
-                player.play();
+                controlsBox.style.display = 'block'; // Show controls
+                btnToggle.innerText = "Pause / Close Box";
+                
+                if(!player.isPlaying) player.play();
+            },
+
+            onMusicPause: () => {
+                btnToggle.innerText = "Open / Resume";
+                player.pause();
             }
         });
 
@@ -171,17 +246,20 @@
             scene.handleFrameData(data);
         });
 
+        // --- INTERACTION WIRING ---
+
+        // Crank Button
         btnCrank.onclick = () => {
             if (scene.isCranking) return;
-
             crankSound.currentTime = 0;
             crankSound.play().catch(e => console.warn("Audio play failed", e));
-
             scene.crank();
-            
-            if(scene.crankCount >= 6) {
-                btnCrank.disabled = true;
-            }
+            if(scene.crankCount >= 6) btnCrank.disabled = true;
+        };
+
+        // Toggle Button (In Controls Box)
+        btnToggle.onclick = () => {
+            scene.toggle();
         };
 
     </script>
