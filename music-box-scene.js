@@ -9,26 +9,24 @@ export class MusicBoxScene {
         this.initialScale = options.initialScale || 1.0;
 
         // State
-        this.$ = {}; // Asset Cache
+        this.$ = {}; 
+        this.generatedPegs = []; 
         this.crankCount = 0;
         this.isLoaded = false;
         
-        // This flag ensures we force-update the objects inside the render loop exactly once
-        this.hasSpoofedInitialFrame = false;
-        
-        // Crank Animation State
+        // Crank Animation
         this.isCranking = false;
         this.crankTargetRot = 0;
         
         // Animation States
         this.state = 'LOADING'; 
-        
-        // Animation Timers
         this.animStartTime = 0;
         this.lastFrameTime = 0;
 
-        // Gear Ratios
-        this.gearRatio = 0.1564 / 0.0789; // ~1.98
+        this.gearRatio = 0.1564 / 0.0789; 
+
+		this.handleFrameData = this.handleFrameData.bind(this);
+		this.buildPegs = this.buildPegs.bind(this);
 
         this._buildScene();
     }
@@ -37,24 +35,19 @@ export class MusicBoxScene {
         const mount = document.getElementById('threeJSMount');
         if (!mount) return;
 
-        // Renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(mount.clientWidth, mount.clientHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
-        // High exposure for shine
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.2; 
         this.renderer.outputEncoding = THREE.sRGBEncoding;
         mount.appendChild(this.renderer.domElement);
 
-        // Scene
         this.scene = new THREE.Scene();
         
-        // Camera
         this.camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
         this.camera.position.set(0, 1, 5);
 
-        // Lights
         const ambient = new THREE.AmbientLight(0xffffff, 0.8); 
         this.scene.add(ambient);
         
@@ -62,10 +55,8 @@ export class MusicBoxScene {
         dirLight.position.set(5, 10, 7);
         this.scene.add(dirLight);
 
-        // Assets
         this._loadAssets();
 
-        // Resize
         window.addEventListener('resize', () => {
             this.camera.aspect = mount.clientWidth / mount.clientHeight;
             this.camera.updateProjectionMatrix();
@@ -78,7 +69,6 @@ export class MusicBoxScene {
     async _loadAssets() {
         const manager = new THREE.LoadingManager();
         
-        // JPG Environment Map
         const texLoader = new THREE.TextureLoader(manager);
         texLoader.load('assets/Basic_2K_01.jpg', (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -91,9 +81,11 @@ export class MusicBoxScene {
             this.model = gltf.scene;
             this.model.scale.setScalar(this.initialScale);
             
-            // --- MATERIAL & OBJECT FIXES ---
             this.model.traverse((obj) => {
                 if (obj.isMesh) {
+                    // Safety: Disable culling everywhere
+                    obj.frustumCulled = false;
+                    
                     if (obj.material.isMeshStandardMaterial) {
                         obj.material.envMapIntensity = 4.0; 
                     }
@@ -102,23 +94,72 @@ export class MusicBoxScene {
                 }
             });
 
-            // 1. ADD TO SCENE FIRST
             this.scene.add(this.model);
             
-            // 2. FORCE MATRIX UPDATE
-            this.scene.updateMatrixWorld(true);
-
-            // 3. CACHE & INIT
+            // Initial Cache
             this._loadAndCacheAssetRefs(this.model);
             this._initObjectStates();
         });
 
         manager.onLoad = () => {
-            console.log("ThreeJS Scene Loaded.");
+            console.log("ThreeJS Scene Loaded. Waiting 1s for stability...");
             this.isLoaded = true;
             this.state = 'IDLE';
-            this.onSceneReady();
+
+            // THE FIX: Wait 1 full second for the renderer to settle
+            setTimeout(() => {
+                console.log("Initializing Scene Data...");
+                
+                // 1. Force the drum/gears to appear by running one frame update
+                this.handleFrameData({ time: 0, morphTargets: [] });
+
+                // 2. Now it is safe to fire the callback (which builds pegs)
+                this.onSceneReady();
+                
+            }, 1000);
         };
+    }
+	
+    buildPegs(songData) {
+        if (!this.$.drum || !this.$.peg) {
+            console.error("BuildPegs Failed: Drum or Peg asset missing.");
+            return;
+        }
+
+        // Cleanup old
+        this.generatedPegs.forEach(p => {
+            if (p.parent) p.parent.remove(p);
+        });
+        this.generatedPegs = [];
+
+        console.log(`Building 3D Pegs for ${songData.length} notes...`);
+
+        songData.forEach((note) => {
+            const refKey = this.$.refKeys[note.keyIndex];
+            if (!refKey) return; 
+
+            const peg = this.$.peg.clone();
+            peg.visible = true; 
+            peg.frustumCulled = false; // Nuclear option for pegs too
+            
+            this.$.drum.add(peg);
+
+            // Position (Channel)
+            peg.position.set(0, 0, 0); 
+            peg.position.x = refKey.position.x;
+
+            // Rotation (Time)
+            // Drum rotates -X. Pegs rotate +X to be "behind" the comb.
+            const angle = note.normalizedStart * Math.PI * 2;
+            peg.rotation.x = angle;
+
+            // Force matrix update on this specific peg
+            peg.updateMatrix();
+
+            this.generatedPegs.push(peg);
+        });
+        
+        console.log(`Successfully spawned ${this.generatedPegs.length} pegs.`);
     }
 
     _loadAndCacheAssetRefs(root) {
@@ -177,14 +218,14 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
 
-        // --- PREVENT CULLING & FORCE VISIBILITY ---
-        const movingParts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
-        movingParts.forEach(part => {
-            if (part) {
-                part.frustumCulled = false; // Never hide even if bbox is weird
-                part.visible = true;
-                part.updateMatrix();
-            }
+        // Force initial visibility
+        const parts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
+        parts.forEach(p => { 
+            if(p) { 
+                p.visible = true; 
+                p.frustumCulled = false;
+                p.updateMatrix(); 
+            } 
         });
 
         if (this.$.peg) this.$.peg.visible = false;
@@ -203,13 +244,14 @@ export class MusicBoxScene {
         }
     }
 
-    // --- PUBLIC ---
-
     crank() {
+
+
         if (!this.isLoaded) return;
         if (this.isCranking) return; 
 
-        this.crankTargetRot += Math.PI; // 180 degrees
+
+        this.crankTargetRot += Math.PI; 
         this.isCranking = true;
         this.crankCount++;
         
@@ -233,8 +275,6 @@ export class MusicBoxScene {
         }
     }
 
-    // --- ANIMATION ---
-
     _startScene() {
         this.state = 'FADING_WALL';
         this.animStartTime = performance.now();
@@ -251,17 +291,7 @@ export class MusicBoxScene {
         
         this.renderer.render(this.scene, this.camera);
         
-        // --- LOOP INJECTION FIX ---
-        // If we are IDLE (loaded) and haven't spoofed the first frame yet, do it now.
-        // This ensures the drum/gears are positioned correctly in the first valid render frame.
-        if (this.state === 'IDLE' && !this.hasSpoofedInitialFrame) {
-            this.handleFrameData({ time: 0, morphTargets: [] });
-            this.hasSpoofedInitialFrame = true;
-        }
-        
         if (this.state === 'IDLE' || this.state === 'LOADING') return;
-
-        // --- STATE MACHINE ---
 
         if (this.state === 'FADING_WALL') {
             const elapsed = (now - this.animStartTime) / 1000;
@@ -289,8 +319,8 @@ export class MusicBoxScene {
             const duration = 5.0; 
             const progress = Math.min(elapsed / duration, 1.0);
             
-            // SmootherStep Camera
-            const t = progress * progress * progress * (progress * (6 * progress - 15) + 10);
+            // Cubic Ease Out
+            const t = 1 - Math.pow(1 - progress, 3);
 
             this._updateCameraLerp(t);
 
@@ -306,6 +336,7 @@ export class MusicBoxScene {
 
             if (progress >= 1.0) {
                 this.state = 'OPENING_LID';
+				this.handleFrameData({ time: 0, morphTargets: [] });
                 this.animStartTime = now;
                 this._enableControls();
             }

@@ -272,5 +272,18 @@ export class MusicBoxPlayer {
             normalizedStart: n.scaledStart / this.totalDuration
         }));
     }
+
+	
+	/**
+     * Returns normalized song data for visualization.
+     * Useful for spawning static 3D geometry (pegs) on the drum.
+     */
+    getSongData() {
+        if (!this.totalDuration) return [];
+        return this.notes.map(n => ({
+            keyIndex: n.key, 
+            normalizedStart: n.scaledStart / this.totalDuration
+        }));
+    }
 	
 }

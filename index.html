@@ -85,14 +85,21 @@
         const scene = new MusicBoxScene({
             initialScale: 1.0, // Adjust if your GLB is tiny/huge
             
-            // Called when 3D assets are loaded
+            // This now fires AFTER the drum is "spoofed" to time 0
             onSceneReady: () => {
-                console.log("System Ready.");
+                console.log("Scene Ready.");
                 btnCrank.disabled = false;
                 btnCrank.innerText = "Wind Crank (0/6)";
                 
-                // Preload audio logic
-                player.load(song, { collisionThreshold: 0.3 });
+                // 1. Process Song (Collision checks etc)
+                player.load(song, { collisionThreshold: 0.3 }).then(() => {
+                    
+                    // 2. Fetch the processed data
+                    const pegData = player.getSongData();
+                    
+                    // 3. Build the 3D Pegs
+                    scene.buildPegs(pegData);
+                });
             },
 
             // Called when the lid finishes opening
