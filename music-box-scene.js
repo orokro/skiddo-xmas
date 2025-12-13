@@ -13,6 +13,10 @@ export class MusicBoxScene {
         this.crankCount = 0;
         this.isLoaded = false;
         
+        // Crank Animation State
+        this.isCranking = false;
+        this.crankTargetRot = 0;
+        
         // Animation States
         this.state = 'LOADING'; 
         
@@ -34,7 +38,7 @@ export class MusicBoxScene {
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(mount.clientWidth, mount.clientHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
-        // Slightly higher exposure to help the metal
+        // High exposure for shine
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.2; 
         this.renderer.outputEncoding = THREE.sRGBEncoding;
@@ -47,11 +51,13 @@ export class MusicBoxScene {
         this.camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
         this.camera.position.set(0, 1, 5);
 
-        // Lights
-        const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+        // Lights (ADJUSTED)
+        // Ambient: Good base level
+        const ambient = new THREE.AmbientLight(0xffffff, 0.8); 
         this.scene.add(ambient);
         
-        const dirLight = new THREE.DirectionalLight(0xffffff, 3.0);
+        // Directional: Lowered to 2.0 (was 3.0) to prevent scene washout
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
         dirLight.position.set(5, 10, 7);
         this.scene.add(dirLight);
 
@@ -87,22 +93,23 @@ export class MusicBoxScene {
             // --- MATERIAL & OBJECT FIXES ---
             this.model.traverse((obj) => {
                 if (obj.isMesh) {
-                    // 1. Boost Metal Reflections
-                    // If material is standard, boost envMapIntensity
+                    // 1. Boost Metal Reflections (Significantly)
                     if (obj.material.isMeshStandardMaterial) {
-                        obj.material.envMapIntensity = 2.5; // Boost reflections significantly
+                        // Was 2.5, now 4.0 for extra chrome shine
+                        obj.material.envMapIntensity = 4.0; 
                     }
-                    
-                    // 2. Enable Shadows (optional but good)
                     obj.castShadow = true;
                     obj.receiveShadow = true;
                 }
             });
 
-            this.scene.add(this.model);
-            
+            // --- CACHE & INIT BEFORE ADDING TO SCENE ---
+            // This prevents the "Pop" effect because we reset rotations 
+            // before the renderer ever sees the model.
             this._loadAndCacheAssetRefs(this.model);
             this._initObjectStates();
+
+            this.scene.add(this.model);
         });
 
         manager.onLoad = () => {
@@ -144,7 +151,6 @@ export class MusicBoxScene {
     _initObjectStates() {
         // 1. Setup Blackout Wall (UNLIT BLACK)
         if (this.$.blackoutWall) {
-            // Swap material to Basic (Unlit) Black
             this.$.blackoutWall.material = new THREE.MeshBasicMaterial({
                 color: 0x000000,
                 transparent: true,
@@ -156,13 +162,12 @@ export class MusicBoxScene {
 
         // 2. Setup Wall (Fade Setup)
         if (this.$.wall) {
-            // Ensure material is transparent for fading
             if (this.$.wall.material) {
                 this.$.wall.material.transparent = true;
                 this.$.wall.material.opacity = 0.0;
                 this.$.wall.material.depthWrite = true; 
             }
-            this.$.wall.visible = true; // Visible but 0 opacity
+            this.$.wall.visible = true; 
         }
 
         // 3. Setup TableCloth
@@ -175,10 +180,15 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
 
-        // 4. Reset Moving Parts
+        // 4. Reset Moving Parts (BEFORE RENDER)
         if (this.$.drum) this.$.drum.rotation.x = 0;
         if (this.$.smallGears) this.$.smallGears.rotation.x = 0;
         if (this.$.peg) this.$.peg.visible = false;
+        
+        // Reset Crank specifically
+        if (this.$.windKey) {
+            this.crankTargetRot = this.$.windKey.rotation.z; // Start where we are
+        }
 
         // 5. Camera
         if (this.$.refStartPos && this.$.refFocus) {
@@ -195,10 +205,19 @@ export class MusicBoxScene {
 
     crank() {
         if (!this.isLoaded) return;
-        if (this.$.windKey) this.$.windKey.rotateZ(THREE.MathUtils.degToRad(-15));
+        if (this.isCranking) return; // Ignore clicks if animating
+
+        // 180 degrees = PI
+        // Positive direction (Opposite of previous negative)
+        this.crankTargetRot += Math.PI; 
+        
+        this.isCranking = true;
 
         this.crankCount++;
         if (this.crankCount >= 6 && this.state === 'IDLE') {
+            // Wait for animation to finish before scene start? 
+            // Or start immediately? Prompt implies logic: "When crank() is called 6 times..."
+            // We'll trigger start immediately, the crank can keep spinning visually.
             this._startScene();
         }
     }
@@ -229,7 +248,11 @@ export class MusicBoxScene {
         requestAnimationFrame(() => this._tick());
         
         const now = performance.now();
+        // Delta time for smooth crank animation
+        const dt = (now - this.lastFrameTime) / 1000;
         this.lastFrameTime = now;
+        
+        this._updateCrankAnimation(dt); // Handle crank physics every frame
         
         this.renderer.render(this.scene, this.camera);
         
@@ -243,13 +266,10 @@ export class MusicBoxScene {
             let progress = elapsed / duration;
             if (progress > 1.0) progress = 1.0;
 
-            // Blackout Fades OUT
             if (this.$.blackoutWall) {
                 this.$.blackoutWall.material.opacity = 1.0 - progress;
                 if (progress >= 1.0) this.$.blackoutWall.visible = false;
             }
-
-            // TableCloth Fades IN
             if (this.$.tableCloth) this.$.tableCloth.material.opacity = progress;
 
             if (progress >= 1.0) {
@@ -263,21 +283,22 @@ export class MusicBoxScene {
             if (!this.camLerp) this._initCameraLerpValues();
 
             const elapsed = (now - this.animStartTime) / 1000;
-            const duration = 5.0; // 50% Speed
+            const duration = 5.0; 
             const progress = Math.min(elapsed / duration, 1.0);
-            const t = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+            
+            // --- EASE-IN-EASE-OUT (SmootherStep) ---
+            // t = x*x*x * (x * (6x - 15) + 10)
+            const t = progress * progress * progress * (progress * (6 * progress - 15) + 10);
 
             this._updateCameraLerp(t);
 
-            // --- FADE IN WALL ---
-            // Start at 10% progress, finish at 50% progress
+            // Wall Fade
             if (this.$.wall && this.$.wall.material) {
                 const fadeStart = 0.1;
                 const fadeEnd = 0.5;
-                
                 if (progress >= fadeStart) {
                     let wallOpacity = (progress - fadeStart) / (fadeEnd - fadeStart);
-                    wallOpacity = Math.min(Math.max(wallOpacity, 0), 1); // Clamp 0-1
+                    wallOpacity = Math.min(Math.max(wallOpacity, 0), 1);
                     this.$.wall.material.opacity = wallOpacity;
                 }
             }
@@ -306,6 +327,25 @@ export class MusicBoxScene {
         }
 
         if (this.controls) this.controls.update();
+    }
+
+    _updateCrankAnimation(dt) {
+        if (!this.$.windKey) return;
+        
+        // Using "Z" for Blender Y (local rotation)
+        const currentRot = this.$.windKey.rotation.z;
+        const target = this.crankTargetRot;
+        
+        if (Math.abs(target - currentRot) > 0.01) {
+            // Smooth lerp towards target
+            // Speed = 10 * dt (adjust for snappiness)
+            const step = (target - currentRot) * (5.0 * dt); 
+            this.$.windKey.rotation.z += step;
+        } else {
+            // Snap to finish
+            this.$.windKey.rotation.z = target;
+            this.isCranking = false;
+        }
     }
 
     _initCameraLerpValues() {
