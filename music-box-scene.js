@@ -6,6 +6,7 @@ export class MusicBoxScene {
     constructor(options = {}) {
         this.onSceneReady = options.onSceneReady || (() => {});
         this.onMusicPlay = options.onMusicPlay || (() => {});
+        this.onReadyForPegs = options.onReadyForPegs || (() => {}); // New Callback
         this.initialScale = options.initialScale || 1.0;
 
         // State
@@ -25,8 +26,9 @@ export class MusicBoxScene {
 
         this.gearRatio = 0.1564 / 0.0789; 
 
-		this.handleFrameData = this.handleFrameData.bind(this);
-		this.buildPegs = this.buildPegs.bind(this);
+        // Bindings
+        this.handleFrameData = this.handleFrameData.bind(this);
+        this.buildPegs = this.buildPegs.bind(this);
 
         this._buildScene();
     }
@@ -83,9 +85,7 @@ export class MusicBoxScene {
             
             this.model.traverse((obj) => {
                 if (obj.isMesh) {
-                    // Safety: Disable culling everywhere
                     obj.frustumCulled = false;
-                    
                     if (obj.material.isMeshStandardMaterial) {
                         obj.material.envMapIntensity = 4.0; 
                     }
@@ -96,7 +96,6 @@ export class MusicBoxScene {
 
             this.scene.add(this.model);
             
-            // Initial Cache
             this._loadAndCacheAssetRefs(this.model);
             this._initObjectStates();
         });
@@ -106,20 +105,16 @@ export class MusicBoxScene {
             this.isLoaded = true;
             this.state = 'IDLE';
 
-            // THE FIX: Wait 1 full second for the renderer to settle
             setTimeout(() => {
                 console.log("Initializing Scene Data...");
-                
                 // 1. Force the drum/gears to appear by running one frame update
                 this.handleFrameData({ time: 0, morphTargets: [] });
-
-                // 2. Now it is safe to fire the callback (which builds pegs)
+                // 2. Now it is safe to fire the callback
                 this.onSceneReady();
-                
             }, 1000);
         };
     }
-	
+    
     buildPegs(songData) {
         if (!this.$.drum || !this.$.peg) {
             console.error("BuildPegs Failed: Drum or Peg asset missing.");
@@ -140,7 +135,7 @@ export class MusicBoxScene {
 
             const peg = this.$.peg.clone();
             peg.visible = true; 
-            peg.frustumCulled = false; // Nuclear option for pegs too
+            peg.frustumCulled = false; 
             
             this.$.drum.add(peg);
 
@@ -149,13 +144,10 @@ export class MusicBoxScene {
             peg.position.x = refKey.position.x;
 
             // Rotation (Time)
-            // Drum rotates -X. Pegs rotate +X to be "behind" the comb.
             const angle = note.normalizedStart * Math.PI * 2;
             peg.rotation.x = angle;
 
-            // Force matrix update on this specific peg
             peg.updateMatrix();
-
             this.generatedPegs.push(peg);
         });
         
@@ -245,11 +237,8 @@ export class MusicBoxScene {
     }
 
     crank() {
-
-
         if (!this.isLoaded) return;
         if (this.isCranking) return; 
-
 
         this.crankTargetRot += Math.PI; 
         this.isCranking = true;
@@ -334,9 +323,16 @@ export class MusicBoxScene {
                 }
             }
 
+            // --- TRIGGER POINT ---
             if (progress >= 1.0) {
                 this.state = 'OPENING_LID';
-				this.handleFrameData({ time: 0, morphTargets: [] });
+                
+                // 1. Force visual update for drum/gears
+                this.handleFrameData({ time: 0, morphTargets: [] });
+                
+                // 2. Build Pegs (New Callback)
+                this.onReadyForPegs();
+
                 this.animStartTime = now;
                 this._enableControls();
             }
