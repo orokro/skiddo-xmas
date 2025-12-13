@@ -34,11 +34,11 @@
         }
 
         .prong {
-            width: 80%;
-            background: linear-gradient(to top, #d4af37, #f9e295);
-            transition: height 0.05s linear; /* Smooth visual update */
-            border-radius: 4px 4px 0 0;
-        }
+			width: 80%;
+			background: linear-gradient(to top, #d4af37, #f9e295);
+			/* transition: height 0.05s linear;  <-- DELETE THIS LINE */
+			border-radius: 4px 4px 0 0;
+		}
 
         .label {
             font-size: 10px;
@@ -177,8 +177,7 @@
         const timeDisplay = document.getElementById('time-display');
 
         // --- 3. Initialize Engine ---
-
-        const player = new MusicBoxPlayer({ rampPercent: 0.005 }); // 5% ramp for visibility
+        const player = new MusicBoxPlayer({ rampTime: 0.1 }); // 5% ramp for visibility
         player.load(demoSong);
 
         // --- 4. The Data Loop ---
@@ -191,7 +190,7 @@
             // Update Visuals based on MorphTargets
             // In ThreeJS, you would do: mesh.morphTargetInfluences[index] = val
             data.morphTargets.forEach((mt, index) => {
-				
+
                 const domProng = visualProngs[index];
                 if(domProng) {
                     // Visualizing the ramp (0.0 to 1.0) as height %

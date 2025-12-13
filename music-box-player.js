@@ -8,7 +8,10 @@ class MusicBoxPlayer {
 	constructor(options = {}) {
 
 		// Configuration
-		this.rampPercent = options.rampPercent || 0.02; // 2% of song length by default for prong lift
+		// 0.1s (100ms) is fast, but visible (approx 6 frames at 60fps)
+		this.rampDurationSeconds = options.rampTime || 0.1;
+
+		// ... rest of constructor
 
 		// State
 		this.songData = null;
@@ -168,76 +171,70 @@ class MusicBoxPlayer {
 	 * Calculates state of all keys and emits data
 	 */
 	emitFrameData(currentSeconds) {
+		
 		if (!this.onPlayDataCallback) return;
 
 		// 1. Calculate Normalized Time
-		// We use the raw transport seconds, assuming the transport is looping correctly.
 		const wrappedTime = currentSeconds % this.totalDuration;
 		const normalizedTime = wrappedTime / this.totalDuration;
 
 		// 2. Calculate Morph Targets
 		const morphTargets = [];
-		const rampDurationSeconds = this.totalDuration * this.rampPercent;
+		const rampWindow = this.rampDurationSeconds; // e.g. 0.1
 
 		for (let i = 0; i < 18; i++) {
 
 			let val = 0.0;
 
-			// Define the "Check Window"
-			// We want to find a note that starts in the future, but within the ramp window.
-			// i.e., NoteStart is between CurrentTime and CurrentTime + RampDuration
+			// Find a note on this key that is IN THE FUTURE, 
+			// but closing in within the ramp window.
 
-			// OPTION A: Standard check (Note is ahead of us in current loop)
+			// Standard Case: Note is directly ahead
 			let upcomingNote = this.notes.find(n => {
 				return n.key === i &&
 					n.scaledStart > wrappedTime &&
-					n.scaledStart < (wrappedTime + rampDurationSeconds);
+					n.scaledStart < (wrappedTime + rampWindow);
 			});
 
-			// OPTION B: Wrap-around check (We are at end of song, Note is at start)
+			// Loop Wrap Case: We are at end of song, Note is at start
 			if (!upcomingNote) {
-				// If we are near the end (Time > Total - Ramp), we need to look at notes at the start (Time 0+)
-				if (wrappedTime > (this.totalDuration - rampDurationSeconds)) {
+				if (wrappedTime > (this.totalDuration - rampWindow)) {
 					upcomingNote = this.notes.find(n => {
-						// The 'effective' start time of this note relative to our current position is:
-						// n.scaledStart + this.totalDuration
 						const effectiveStart = n.scaledStart + this.totalDuration;
 						return n.key === i &&
 							effectiveStart > wrappedTime &&
-							effectiveStart < (wrappedTime + rampDurationSeconds);
+							effectiveStart < (wrappedTime + rampWindow);
 					});
 				}
 			}
 
 			if (upcomingNote) {
-				// Calculate distance to the hit
+				// Calculate how far away the hit is
 				let timeUntilHit;
 
 				if (upcomingNote.scaledStart < wrappedTime) {
-					// This handles the wrap-around case found in Option B
-					// e.g. Note is at 0.1, We are at 9.9, Total is 10.0
-					// Time until hit = (0.1 + 10.0) - 9.9 = 0.2
+					// Wrap case calculation
 					timeUntilHit = (upcomingNote.scaledStart + this.totalDuration) - wrappedTime;
 				} else {
-					// Standard case
+					// Standard calculation
 					timeUntilHit = upcomingNote.scaledStart - wrappedTime;
 				}
 
-				// 1.0 means fully lifted (timeUntilHit == 0), 0.0 means resting (timeUntilHit == rampDuration)
-				const progress = 1.0 - (timeUntilHit / rampDurationSeconds);
-				val = Math.max(0, Math.min(1, progress));
+				// If timeUntilHit is 0.1 (start of ramp), val is 0.
+				// If timeUntilHit is 0.001 (right before note), val is ~1.
+				val = 1.0 - (timeUntilHit / rampWindow);
+				val = Math.max(0, Math.min(1, val));
 			}
 
-			if (i < this.keys.length) {
-				morphTargets.push({
-					name: `Key ${i + 1}`,
-					value: val
-				});
-			}
-			
-		}// next i
+			// If no upcoming note is found (or we just passed it), 
+			// val defaults to 0.0, creating the instant snap.
 
-		// 3. Fire Callback
+			morphTargets.push({
+				name: `Key ${i + 1}`,
+				value: val
+			});
+		}
+
 		this.onPlayDataCallback({
 			time: normalizedTime,
 			morphTargets: morphTargets
