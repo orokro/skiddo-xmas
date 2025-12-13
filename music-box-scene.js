@@ -12,21 +12,20 @@ export class MusicBoxScene {
         // State
         this.$ = {}; 
         this.generatedPegs = []; 
+        this.responsePlanes = []; 
         this.crankCount = 0;
         this.isLoaded = false;
         
-        // Crank Animation
         this.isCranking = false;
         this.crankTargetRot = 0;
         
-        // Animation States
         this.state = 'LOADING'; 
         this.animStartTime = 0;
+        this.playStartTime = 0;
         this.lastFrameTime = 0;
 
         this.gearRatio = 0.1564 / 0.0789; 
 
-        // Bindings
         this.handleFrameData = this.handleFrameData.bind(this);
         this.buildPegs = this.buildPegs.bind(this);
 
@@ -107,9 +106,7 @@ export class MusicBoxScene {
 
             setTimeout(() => {
                 console.log("Initializing Scene Data...");
-                // 1. Force the drum/gears to appear by running one frame update
                 this.handleFrameData({ time: 0, morphTargets: [] });
-                // 2. Now it is safe to fire the callback
                 this.onSceneReady();
             }, 1000);
         };
@@ -121,7 +118,6 @@ export class MusicBoxScene {
             return;
         }
 
-        // Cleanup old
         this.generatedPegs.forEach(p => {
             if (p.parent) p.parent.remove(p);
         });
@@ -137,13 +133,11 @@ export class MusicBoxScene {
             peg.visible = true; 
             peg.frustumCulled = false; 
             
-            // Fix Scale (Reset to 1, then apply original)
             peg.scale.set(1, 1, 1);
             peg.scale.copy(this.$.peg.scale);
 
             this.$.drum.add(peg);
 
-            // Robust Positioning (Global -> Local)
             const targetPos = new THREE.Vector3();
             refKey.getWorldPosition(targetPos);
             this.$.drum.worldToLocal(targetPos);
@@ -151,7 +145,6 @@ export class MusicBoxScene {
             peg.position.set(0, 0, 0); 
             peg.position.x = targetPos.x;
 
-            // Rotation (Time)
             const angle = note.normalizedStart * Math.PI * 2;
             peg.rotation.x = angle;
 
@@ -164,13 +157,15 @@ export class MusicBoxScene {
 
     _loadAndCacheAssetRefs(root) {
         this.$.refKeys = [];
+        this.responsePlanes = []; 
+
         root.traverse((obj) => {
             if (obj.isMesh || obj.isObject3D) {
                 switch(obj.name) {
                     case 'refStartPos': this.$.refStartPos = obj; break;
                     case 'refEndPos':   this.$.refEndPos = obj; break;
                     case 'refFocus':    this.$.refFocus = obj; break;
-                    case 'refFocusEnd': this.$.refFocusEnd = obj; break; // NEW
+                    case 'refFocusEnd': this.$.refFocusEnd = obj; break;
                     case 'BlackoutWall':this.$.blackoutWall = obj; break;
                     case 'WindKey':     this.$.windKey = obj; break;
                     case 'Wall':        this.$.wall = obj; break;
@@ -181,6 +176,13 @@ export class MusicBoxScene {
                     case 'Peg':         this.$.peg = obj; break;
                     case 'SmallGears':  this.$.smallGears = obj; break;
                     case 'FlyWeight':   this.$.flyWeight = obj; break;
+                    case 'Responses':   
+                        obj.traverse((child) => {
+                            if (child.isMesh) {
+                                this.responsePlanes.push(child);
+                            }
+                        });
+                        break;
                 }
                 if (obj.name.startsWith('refKey')) {
                     const index = parseInt(obj.name.replace('refKey', '')) - 1;
@@ -218,8 +220,33 @@ export class MusicBoxScene {
             }
             this.$.tableCloth.visible = true;
         }
+        
+        // --- FIX RESPONSE PLANES ---
+        this.responsePlanes.forEach(plane => {
+            plane.renderOrder = 999;
+            plane.frustumCulled = false;
 
-        // Force initial visibility
+            if (plane.geometry) {
+                plane.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
+            }
+            
+            if (plane.material) {
+                // *** CRITICAL FIX: CLONE MATERIAL ***
+                // This ensures every card has its own opacity state
+                plane.material = plane.material.clone();
+
+                plane.material.transparent = true;
+                plane.material.opacity = 0.0; 
+                plane.material.side = THREE.DoubleSide; 
+                plane.material.depthWrite = false; 
+                
+                plane.material.polygonOffset = true;
+                plane.material.polygonOffsetFactor = -1.0;
+                plane.material.polygonOffsetUnits = -1.0;
+            }
+            plane.visible = true;
+        });
+
         const parts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
         parts.forEach(p => { 
             if(p) { 
@@ -317,7 +344,6 @@ export class MusicBoxScene {
             const duration = 5.0; 
             const progress = Math.min(elapsed / duration, 1.0);
             
-            // Cubic Ease Out
             const t = 1 - Math.pow(1 - progress, 3);
 
             this._updateCameraLerp(t);
@@ -332,16 +358,10 @@ export class MusicBoxScene {
                 }
             }
 
-            // --- TRIGGER POINT: BUILD PEGS BEFORE LID OPENS ---
             if (progress >= 1.0) {
                 this.state = 'OPENING_LID';
-                
-                // 1. Force visual update for drum/gears
                 this.handleFrameData({ time: 0, morphTargets: [] });
-                
-                // 2. Build Pegs
                 this.onReadyForPegs();
-
                 this.animStartTime = now;
                 this._enableControls();
             }
@@ -360,7 +380,24 @@ export class MusicBoxScene {
             if (progress >= 1.0) {
                 this.state = 'PLAYING';
                 this.onMusicPlay();
+                this.playStartTime = now;
             }
+        }
+        
+        else if (this.state === 'PLAYING') {
+            const timeSincePlay = (now - this.playStartTime) / 1000;
+            const fadeDuration = 1.0;
+            const interval = 3.0; // 1s fade + 2s pause
+            
+            this.responsePlanes.forEach((plane, index) => {
+                const startDelay = index * interval;
+                
+                if (timeSincePlay > startDelay) {
+                    let op = (timeSincePlay - startDelay) / fadeDuration;
+                    op = Math.min(Math.max(op, 0), 1);
+                    if(plane.material) plane.material.opacity = op;
+                }
+            });
         }
 
         if (this.controls) this.controls.update();
@@ -388,13 +425,12 @@ export class MusicBoxScene {
         const startPos = new THREE.Vector3();
         const endPos = new THREE.Vector3();
         const focusStart = new THREE.Vector3();
-        const focusEnd = new THREE.Vector3(); // NEW
+        const focusEnd = new THREE.Vector3(); 
 
         this.$.refStartPos.getWorldPosition(startPos);
         this.$.refEndPos.getWorldPosition(endPos);
         this.$.refFocus.getWorldPosition(focusStart);
         
-        // Handle new focus end. Fallback to start focus if missing.
         if (this.$.refFocusEnd) {
             this.$.refFocusEnd.getWorldPosition(focusEnd);
         } else {
@@ -410,8 +446,6 @@ export class MusicBoxScene {
     }
 
     _updateCameraLerp(t) {
-        // Position: Interpolate around the START focus (Pivot)
-        // This keeps the arc shape consistent
         const vStart = new THREE.Vector3().subVectors(this.camLerp.start, this.camLerp.focusStart);
         const vEnd = new THREE.Vector3().subVectors(this.camLerp.end, this.camLerp.focusStart);
         
@@ -425,8 +459,6 @@ export class MusicBoxScene {
         const finalPos = vCurrent.add(this.camLerp.focusStart);
         this.camera.position.copy(finalPos);
 
-        // Rotation: Interpolate the LookAt Target
-        // From refFocus -> refFocusEnd
         const currentLookAt = new THREE.Vector3().lerpVectors(
             this.camLerp.focusStart, 
             this.camLerp.focusEnd, 
@@ -441,7 +473,6 @@ export class MusicBoxScene {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         
-        // Target the FINAL focus point so interaction feels centered correctly
         if (this.$.refFocusEnd) {
             const focusVec = new THREE.Vector3();
             this.$.refFocusEnd.getWorldPosition(focusVec);
