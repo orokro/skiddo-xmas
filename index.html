@@ -2,73 +2,124 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Music Box Module Test</title>
+    <title>3D Music Box Experience</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
     <style>
-        body { font-family: sans-serif; background: #222; color: #eee; padding: 20px; }
-        .controls { margin-bottom: 20px; }
-        button { padding: 10px 20px; cursor: pointer; background: #444; color: #fff; border: 1px solid #666; }
-        .visualizer { display: flex; gap: 5px; height: 200px; align-items: flex-end; margin-top: 20px; border-bottom: 2px solid #555; }
-        .key-strip { flex: 1; background: #333; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
-        .prong { width: 80%; background: #d4af37; border-radius: 4px 4px 0 0; }
-        /* NO CSS TRANSITION HERE, JS handles it all */
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #threeJSMount { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        #ui-layer {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 30px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover { background: rgba(255,255,255,0.3); }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
     </style>
 </head>
 <body>
-    <h1>Music Box (Sampler Version)</h1>
-    <div class="controls">
-        <button id="btn-play">Play</button>
-        <button id="btn-pause">Pause</button>
-        <button id="btn-stop">Stop</button>
-    </div>
-    <div id="time-display">Time: 0.00</div>
-    <div class="visualizer" id="visualizer-container"></div>
+
+    <div id="threeJSMount"></div>
+    
+    <div id="ui-layer">
+        <button id="btn-crank" disabled>Wind Crank (0/6)</button>
+        </div>
 
     <script type="module">
         import { MusicBoxPlayer } from './music-box-player.js';
+        import { MusicBoxScene } from './music-box-scene.js';
 
-        // 1. Setup Data (Jingle Bells snippet)
+        // --- 1. SETUP SONG DATA (Jingle Bells) ---
+        // (Copying the logic from before, but kept concise)
         const BEAT = 0.5;
         let t = 0;
         const notes = [];
         const add = (k, dur) => notes.push({startTime:t, endTime:t+(dur*BEAT), key:k});
         const adv = (b) => t += (b*BEAT);
-
-        // Keys 0-17
         const keys = ["G3","A3","B3","C4","D4","E4","F4","G4","A4","B4","C5","D5","E5","F5","G5","A5","B5","C6"];
-        const [E4, G4, C4, D4] = [5, 7, 3, 4]; // indices
+        const [E4, G4, C4, D4, F4] = [5, 7, 3, 4, 6]; 
 
-        // Composition
-        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2); // Jingle Bells
-        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2); // Jingle Bells
-        add(E4,1); adv(1); add(G4,1); adv(1); add(C4,1); adv(1); add(D4,1); adv(1); add(E4,4); adv(4); // All the way
+        // Jingle Bells Composition
+        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2);
+        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2);
+        add(E4,1); adv(1); add(G4,1); adv(1); add(C4,1); adv(1); add(D4,1); adv(1); add(E4,4); adv(4);
+        add(F4,1); adv(1); add(F4,1); adv(1); add(F4,1); adv(1); add(F4,1); adv(1); 
+        add(F4,1); adv(1); add(E4,1); adv(1); add(E4,1); adv(1); adv(1);
 
         const song = { songName: "Jingle Bells", speed: 1.0, keys: keys, notes: notes };
 
-        // 2. Setup Visuals
-        const container = document.getElementById('visualizer-container');
-        const visualProngs = keys.map(k => {
-            const s = document.createElement('div'); s.className='key-strip';
-            const p = document.createElement('div'); p.className='prong'; p.style.height='0%';
-            s.appendChild(p); container.appendChild(s);
-            return p;
+        // --- 2. INITIALIZE ---
+        
+        const player = new MusicBoxPlayer({ rampTime: 0.1 }); // 0.1s mechanical snap
+        
+        const btnCrank = document.getElementById('btn-crank');
+
+        const scene = new MusicBoxScene({
+            initialScale: 1.0, // Adjust if your GLB is tiny/huge
+            
+            // Called when 3D assets are loaded
+            onSceneReady: () => {
+                console.log("System Ready.");
+                btnCrank.disabled = false;
+                btnCrank.innerText = "Wind Crank (0/6)";
+                
+                // Preload audio logic
+                player.load(song, { collisionThreshold: 0.3 });
+            },
+
+            // Called when the lid finishes opening
+            onMusicPlay: () => {
+                console.log("Animation finished, starting Audio...");
+                btnCrank.style.display = 'none'; // Hide UI
+                player.play();
+            }
         });
 
-        // 3. Setup Player
-        const player = new MusicBoxPlayer({ rampTime: 0.1 }); // 0.1s snap
-        player.load(song);
+        // --- 3. WIRING ---
 
-        player.onPlayData(data => {
-            document.getElementById('time-display').innerText = `Time: ${data.time.toFixed(3)}`;
-            data.morphTargets.forEach((mt, i) => {
-                if(visualProngs[i]) visualProngs[i].style.height = (mt.value * 50) + '%';
-            });
+        // Connect Player Data -> Scene Visuals
+        player.onPlayData((data) => {
+            scene.handleFrameData(data);
         });
 
-        // 4. Bind Buttons
-        document.getElementById('btn-play').onclick = () => player.play();
-        document.getElementById('btn-pause').onclick = () => player.pause();
-        document.getElementById('btn-stop').onclick = () => player.stop();
+        // Connect UI -> Scene Crank
+        btnCrank.onclick = () => {
+            scene.crank();
+            btnCrank.innerText = `Wind Crank (${scene.crankCount}/6)`;
+            if(scene.crankCount >= 6) {
+                btnCrank.disabled = true;
+                btnCrank.innerText = "Playing...";
+            }
+        };
+
     </script>
 </body>
 </html>
