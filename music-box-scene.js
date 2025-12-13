@@ -13,6 +13,9 @@ export class MusicBoxScene {
         this.crankCount = 0;
         this.isLoaded = false;
         
+        // This flag ensures we force-update the objects inside the render loop exactly once
+        this.hasSpoofedInitialFrame = false;
+        
         // Crank Animation State
         this.isCranking = false;
         this.crankTargetRot = 0;
@@ -51,12 +54,10 @@ export class MusicBoxScene {
         this.camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
         this.camera.position.set(0, 1, 5);
 
-        // Lights (ADJUSTED)
-        // Ambient: Good base level
+        // Lights
         const ambient = new THREE.AmbientLight(0xffffff, 0.8); 
         this.scene.add(ambient);
         
-        // Directional: Lowered to 2.0 (was 3.0) to prevent scene washout
         const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
         dirLight.position.set(5, 10, 7);
         this.scene.add(dirLight);
@@ -93,9 +94,7 @@ export class MusicBoxScene {
             // --- MATERIAL & OBJECT FIXES ---
             this.model.traverse((obj) => {
                 if (obj.isMesh) {
-                    // 1. Boost Metal Reflections (Significantly)
                     if (obj.material.isMeshStandardMaterial) {
-                        // Was 2.5, now 4.0 for extra chrome shine
                         obj.material.envMapIntensity = 4.0; 
                     }
                     obj.castShadow = true;
@@ -103,25 +102,20 @@ export class MusicBoxScene {
                 }
             });
 
-            // --- CACHE & INIT BEFORE ADDING TO SCENE ---
-            // This prevents the "Pop" effect because we reset rotations 
-            // before the renderer ever sees the model.
+            // 1. ADD TO SCENE FIRST
+            this.scene.add(this.model);
+            
+            // 2. FORCE MATRIX UPDATE
+            this.scene.updateMatrixWorld(true);
+
+            // 3. CACHE & INIT
             this._loadAndCacheAssetRefs(this.model);
             this._initObjectStates();
-
-            this.scene.add(this.model);
         });
 
         manager.onLoad = () => {
             console.log("ThreeJS Scene Loaded.");
             this.isLoaded = true;
-
-            // --- FIX FOR INVISIBLE OBJECTS ---
-            // Spoof an initial frame at time 0. This forces the drum, gears, 
-            // and flywheel to update their positions/matrices immediately
-            // so they are visible before the music starts.
-            this.handleFrameData({ time: 0, morphTargets: [] });
-
             this.state = 'IDLE';
             this.onSceneReady();
         };
@@ -129,7 +123,6 @@ export class MusicBoxScene {
 
     _loadAndCacheAssetRefs(root) {
         this.$.refKeys = [];
-
         root.traverse((obj) => {
             if (obj.isMesh || obj.isObject3D) {
                 switch(obj.name) {
@@ -156,7 +149,6 @@ export class MusicBoxScene {
     }
 
     _initObjectStates() {
-        // 1. Setup Blackout Wall (UNLIT BLACK)
         if (this.$.blackoutWall) {
             this.$.blackoutWall.material = new THREE.MeshBasicMaterial({
                 color: 0x000000,
@@ -167,7 +159,6 @@ export class MusicBoxScene {
             this.$.blackoutWall.visible = true;
         }
 
-        // 2. Setup Wall (Fade Setup)
         if (this.$.wall) {
             if (this.$.wall.material) {
                 this.$.wall.material.transparent = true;
@@ -177,7 +168,6 @@ export class MusicBoxScene {
             this.$.wall.visible = true; 
         }
 
-        // 3. Setup TableCloth
         if (this.$.tableCloth) {
             if (this.$.tableCloth.material) {
                 this.$.tableCloth.material.transparent = true;
@@ -187,17 +177,22 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
 
-        // 4. Reset Moving Parts (BEFORE RENDER)
-        if (this.$.drum) this.$.drum.rotation.x = 0;
-        if (this.$.smallGears) this.$.smallGears.rotation.x = 0;
+        // --- PREVENT CULLING & FORCE VISIBILITY ---
+        const movingParts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
+        movingParts.forEach(part => {
+            if (part) {
+                part.frustumCulled = false; // Never hide even if bbox is weird
+                part.visible = true;
+                part.updateMatrix();
+            }
+        });
+
         if (this.$.peg) this.$.peg.visible = false;
         
-        // Reset Crank specifically
         if (this.$.windKey) {
-            this.crankTargetRot = this.$.windKey.rotation.z; // Start where we are
+            this.crankTargetRot = this.$.windKey.rotation.z; 
         }
 
-        // 5. Camera
         if (this.$.refStartPos && this.$.refFocus) {
             const startVec = new THREE.Vector3();
             const focusVec = new THREE.Vector3();
@@ -211,18 +206,13 @@ export class MusicBoxScene {
     // --- PUBLIC ---
 
     crank() {
-		this.handleFrameData({ time: 0, morphTargets: [] });
-		
         if (!this.isLoaded) return;
-        if (this.isCranking) return; // Ignore clicks if animating
+        if (this.isCranking) return; 
 
-        // 180 degrees = PI
-        // Positive direction (Opposite of previous negative)
-        this.crankTargetRot += Math.PI; 
-        
+        this.crankTargetRot += Math.PI; // 180 degrees
         this.isCranking = true;
-
         this.crankCount++;
+        
         if (this.crankCount >= 6 && this.state === 'IDLE') {
             this._startScene();
         }
@@ -254,13 +244,20 @@ export class MusicBoxScene {
         requestAnimationFrame(() => this._tick());
         
         const now = performance.now();
-        // Delta time for smooth crank animation
         const dt = (now - this.lastFrameTime) / 1000;
         this.lastFrameTime = now;
         
-        this._updateCrankAnimation(dt); // Handle crank physics every frame
+        this._updateCrankAnimation(dt);
         
         this.renderer.render(this.scene, this.camera);
+        
+        // --- LOOP INJECTION FIX ---
+        // If we are IDLE (loaded) and haven't spoofed the first frame yet, do it now.
+        // This ensures the drum/gears are positioned correctly in the first valid render frame.
+        if (this.state === 'IDLE' && !this.hasSpoofedInitialFrame) {
+            this.handleFrameData({ time: 0, morphTargets: [] });
+            this.hasSpoofedInitialFrame = true;
+        }
         
         if (this.state === 'IDLE' || this.state === 'LOADING') return;
 
@@ -292,13 +289,11 @@ export class MusicBoxScene {
             const duration = 5.0; 
             const progress = Math.min(elapsed / duration, 1.0);
             
-            // --- EASE-IN-EASE-OUT (SmootherStep) ---
-            // t = x*x*x * (x * (6x - 15) + 10)
+            // SmootherStep Camera
             const t = progress * progress * progress * (progress * (6 * progress - 15) + 10);
 
             this._updateCameraLerp(t);
 
-            // Wall Fade
             if (this.$.wall && this.$.wall.material) {
                 const fadeStart = 0.1;
                 const fadeEnd = 0.5;
@@ -337,18 +332,12 @@ export class MusicBoxScene {
 
     _updateCrankAnimation(dt) {
         if (!this.$.windKey) return;
-        
-        // Using "Z" for Blender Y (local rotation)
         const currentRot = this.$.windKey.rotation.z;
         const target = this.crankTargetRot;
-        
         if (Math.abs(target - currentRot) > 0.01) {
-            // Smooth lerp towards target
-            // Speed = 10 * dt (adjust for snappiness)
             const step = (target - currentRot) * (5.0 * dt); 
             this.$.windKey.rotation.z += step;
         } else {
-            // Snap to finish
             this.$.windKey.rotation.z = target;
             this.isCranking = false;
         }

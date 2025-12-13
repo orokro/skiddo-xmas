@@ -258,4 +258,19 @@ export class MusicBoxPlayer {
             morphTargets: morphTargets
         });
     }
+
+
+	/**
+     * Returns normalized song data for visualization.
+     * Useful for spawning static 3D geometry (pegs) on the drum.
+     */
+    getSongData() {
+        // Return a clean list of notes with normalized time (0.0 to 1.0)
+        // and the final key index (0-17)
+        return this.notes.map(n => ({
+            keyIndex: n.key, 
+            normalizedStart: n.scaledStart / this.totalDuration
+        }));
+    }
+	
 }
