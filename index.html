@@ -2,228 +2,73 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Music Box Engine Test</title>
+    <title>Music Box Module Test</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <style>
         body { font-family: sans-serif; background: #222; color: #eee; padding: 20px; }
         .controls { margin-bottom: 20px; }
-        button { padding: 10px 20px; cursor: pointer; font-size: 16px; background: #444; color: #fff; border: 1px solid #666; border-radius: 4px; }
-        button:hover { background: #555; }
-        
-        .visualizer {
-            display: flex;
-            gap: 5px;
-            height: 200px;
-            align-items: flex-end;
-            margin-top: 20px;
-            border-bottom: 2px solid #555;
-            padding-bottom: 5px;
-        }
-        
-        .key-strip {
-            flex: 1;
-            background: #333;
-            position: relative;
-            height: 100%;
-            border-radius: 4px 4px 0 0;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
-            align-items: center;
-        }
-
-        .prong {
-			width: 80%;
-			background: linear-gradient(to top, #d4af37, #f9e295);
-			/* transition: height 0.05s linear;  <-- DELETE THIS LINE */
-			border-radius: 4px 4px 0 0;
-		}
-
-        .label {
-            font-size: 10px;
-            color: #aaa;
-            margin-top: 5px;
-            text-align: center;
-        }
-        
-        #time-display { font-family: monospace; font-size: 1.2em; margin-top: 10px; color: #d4af37; }
+        button { padding: 10px 20px; cursor: pointer; background: #444; color: #fff; border: 1px solid #666; }
+        .visualizer { display: flex; gap: 5px; height: 200px; align-items: flex-end; margin-top: 20px; border-bottom: 2px solid #555; }
+        .key-strip { flex: 1; background: #333; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+        .prong { width: 80%; background: #d4af37; border-radius: 4px 4px 0 0; }
+        /* NO CSS TRANSITION HERE, JS handles it all */
     </style>
 </head>
 <body>
-
-    <h1>Virtual Music Box Engine</h1>
-    
+    <h1>Music Box (Sampler Version)</h1>
     <div class="controls">
         <button id="btn-play">Play</button>
         <button id="btn-pause">Pause</button>
         <button id="btn-stop">Stop</button>
     </div>
-
     <div id="time-display">Time: 0.00</div>
+    <div class="visualizer" id="visualizer-container"></div>
 
-    <div class="visualizer" id="visualizer-container">
-        </div>
+    <script type="module">
+        import { MusicBoxPlayer } from './music-box-player.js';
 
-    <script src="music-box-player.js"></script>
-
-    <script>
-        // --- 1. Define Song Data (Jingle Bells) ---
-        
-        // Helper to make writing notes easier
-        // We assume 1 beat = 0.5 seconds (120 BPM)
+        // 1. Setup Data (Jingle Bells snippet)
         const BEAT = 0.5;
-        let tCursor = 0; // Time cursor
+        let t = 0;
+        const notes = [];
+        const add = (k, dur) => notes.push({startTime:t, endTime:t+(dur*BEAT), key:k});
+        const adv = (b) => t += (b*BEAT);
 
-        const notesList = [];
+        // Keys 0-17
+        const keys = ["G3","A3","B3","C4","D4","E4","F4","G4","A4","B4","C5","D5","E5","F5","G5","A5","B5","C6"];
+        const [E4, G4, C4, D4] = [5, 7, 3, 4]; // indices
 
-        function addNote(keyIndex, durationBeats) {
-            notesList.push({
-                startTime: tCursor,
-                endTime: tCursor + (durationBeats * BEAT),
-                key: keyIndex
-            });
-            // We don't auto-advance cursor because music boxes are polyphonic, 
-            // we advance manually in the song composition below
-        }
+        // Composition
+        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2); // Jingle Bells
+        add(E4,1); adv(1); add(E4,1); adv(1); add(E4,2); adv(2); // Jingle Bells
+        add(E4,1); adv(1); add(G4,1); adv(1); add(C4,1); adv(1); add(D4,1); adv(1); add(E4,4); adv(4); // All the way
 
-        function advance(beats) {
-            tCursor += (beats * BEAT);
-        }
+        const song = { songName: "Jingle Bells", speed: 1.0, keys: keys, notes: notes };
 
-        // Key Mapping (C Major Scale mostly)
-        // Index 0 to 17
-        const songKeys = [
-            "G3", "A3", "B3",  // Bass/Lower
-            "C4", "D4", "E4", "F4", "G4", "A4", "B4", // Mid
-            "C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6" // High
-        ];
-        
-        // Indices for readability
-        const G3=0, C4=3, D4=4, E4=5, F4=6, G4=7, A4=8, C5=10, D5=11, E5=12;
-
-        // Composition: Jingle Bells (Chorus)
-        
-        // "Jingle Bells" (E-E-E)
-        addNote(E4, 1); advance(1);
-        addNote(E4, 1); advance(1);
-        addNote(E4, 2); advance(2);
-
-        // "Jingle Bells" (E-E-E)
-        addNote(E4, 1); advance(1);
-        addNote(E4, 1); advance(1);
-        addNote(E4, 2); advance(2);
-
-        // "Jingle All The Way" (E-G-C-D-E)
-        addNote(E4, 1); advance(1);
-        addNote(G4, 1); advance(1);
-        addNote(C4, 1); advance(1);
-        addNote(D4, 1); advance(1);
-        addNote(E4, 4); advance(4);
-
-        // "Oh what fun it is to ride" (F-F-F-F-F-E-E)
-        addNote(F4, 1); advance(1);
-        addNote(F4, 1); advance(1);
-        addNote(F4, 1); advance(1);
-        addNote(F4, 1); advance(1);
-        addNote(F4, 1); advance(1);
-        addNote(E4, 1); advance(1);
-        addNote(E4, 1); advance(1);
-        
-        // "In a one horse open sleigh" (E-E-E-D-D-E-D-G)
-        addNote(E4, 0.5); advance(0.5);
-        addNote(E4, 0.5); advance(0.5);
-        addNote(E4, 1); advance(1);
-        addNote(D4, 1); advance(1);
-        addNote(D4, 1); advance(1);
-        addNote(E4, 1); advance(1);
-        addNote(D4, 2); advance(2);
-        addNote(G4, 2); advance(2);
-
-
-        const demoSong = {
-            songName: "Jingle Bells",
-            speed: 1.0, // Normal speed
-            keys: songKeys,
-            notes: notesList
-        };
-
-        // --- 2. Initialize UI ---
-
+        // 2. Setup Visuals
         const container = document.getElementById('visualizer-container');
-        const visualProngs = [];
-
-        // Generate HTML bars for the 18 keys
-        songKeys.forEach((k, i) => {
-            const strip = document.createElement('div');
-            strip.className = 'key-strip';
-            
-            const prong = document.createElement('div');
-            prong.className = 'prong';
-            prong.style.height = '0%';
-            
-            const label = document.createElement('div');
-            label.className = 'label';
-            label.innerText = k; // Note Name
-            // Or use "K" + (i+1) for Key Number
-
-            strip.appendChild(prong);
-            container.appendChild(strip);
-            strip.appendChild(label);
-
-            visualProngs.push(prong);
+        const visualProngs = keys.map(k => {
+            const s = document.createElement('div'); s.className='key-strip';
+            const p = document.createElement('div'); p.className='prong'; p.style.height='0%';
+            s.appendChild(p); container.appendChild(s);
+            return p;
         });
 
-        const timeDisplay = document.getElementById('time-display');
+        // 3. Setup Player
+        const player = new MusicBoxPlayer({ rampTime: 0.1 }); // 0.1s snap
+        player.load(song);
 
-        // --- 3. Initialize Engine ---
-        const player = new MusicBoxPlayer({ rampTime: 0.1 }); // 5% ramp for visibility
-        player.load(demoSong);
-
-        // --- 4. The Data Loop ---
-
-        player.onPlayData((data) => {
-
-            // Update Time Display
-            timeDisplay.innerText = `Norm Time: ${data.time.toFixed(3)}`;
-
-            // Update Visuals based on MorphTargets
-            // In ThreeJS, you would do: mesh.morphTargetInfluences[index] = val
-            data.morphTargets.forEach((mt, index) => {
-
-                const domProng = visualProngs[index];
-                if(domProng) {
-                    // Visualizing the ramp (0.0 to 1.0) as height %
-                    // Multiplied by 50 to keep it within the box
-                    domProng.style.height = (mt.value * 50) + '%';
-                    
-                    // Change color when it "snaps" (playing) vs ramping
-                    if(mt.value === 0) {
-                        domProng.style.opacity = '0.5';
-                    } else {
-                        domProng.style.opacity = '1.0';
-                    }
-                }
+        player.onPlayData(data => {
+            document.getElementById('time-display').innerText = `Time: ${data.time.toFixed(3)}`;
+            data.morphTargets.forEach((mt, i) => {
+                if(visualProngs[i]) visualProngs[i].style.height = (mt.value * 50) + '%';
             });
         });
 
-        // --- 5. Controls ---
-
-        document.getElementById('btn-play').addEventListener('click', () => {
-            player.play();
-        });
-
-        document.getElementById('btn-pause').addEventListener('click', () => {
-            player.pause();
-        });
-
-        document.getElementById('btn-stop').addEventListener('click', () => {
-            player.stop();
-            // Reset visuals manually
-            visualProngs.forEach(p => p.style.height = '0%');
-            timeDisplay.innerText = "Time: 0.00";
-        });
-
+        // 4. Bind Buttons
+        document.getElementById('btn-play').onclick = () => player.play();
+        document.getElementById('btn-pause').onclick = () => player.pause();
+        document.getElementById('btn-stop').onclick = () => player.stop();
     </script>
 </body>
 </html>

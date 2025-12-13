@@ -1,244 +1,176 @@
-/**
- * MusicBoxPlayer
- * Handles logic for playing a custom JSON song format using Tone.js
- * and emitting visual data for a 3D music box.
- */
-class MusicBoxPlayer {
+// music-box-player.js
 
-	constructor(options = {}) {
+// Note: Tone.js is loaded globally via CDN in the HTML, 
+// so we access it via 'window.Tone' or just 'Tone'.
 
-		// Configuration
-		// 0.1s (100ms) is fast, but visible (approx 6 frames at 60fps)
-		this.rampDurationSeconds = options.rampTime || 0.1;
+export class MusicBoxPlayer {
+    constructor(options = {}) {
+        this.rampDurationSeconds = options.rampTime || 0.1; 
+        
+        this.songData = null;
+        this.totalDuration = 0;
+        this.notes = [];
+        this.keys = [];
+        this.isPlaying = false;
+        this.rafId = null;
+        this.onPlayDataCallback = null;
 
-		// ... rest of constructor
+        // --- THE SOUND UPGRADE ---
+        // We use a Sampler instead of a Synth.
+        // It maps a specific note (C4) to a file. 
+        // Tone.js automatically repitches it for other keys!
+        this.sampler = new Tone.Sampler({
+            urls: {
+                C4: "assets/C4.wav", // Make sure this file exists!
+            },
+            // A nice release ensures the bell rings out even if the note duration is short
+            release: 1, 
+            
+            // This handles the "loading" callback
+            onload: () => {
+                console.log("Sampler loaded C4.wav successfully!");
+            }
+        }).toDestination();
 
-		// State
-		this.songData = null;
-		this.totalDuration = 0;
-		this.notes = [];
-		this.keys = [];
-		this.isPlaying = false;
+        // Music boxes are usually quiet, boost volume if needed
+        this.sampler.volume.value = -5;
+    }
 
-		// Callbacks
-		this.onPlayDataCallback = null;
+    /**
+     * Loads the song object
+     */
+    async load(songObj) {
+        this.stop();
 
-		// Animation Loop ID
-		this.rafId = null;
+        this.keys = songObj.keys;
+        const speedMultiplier = songObj.speed || 1.0;
 
-		// Initialize Tone.js Synth
-		// using a PolySynth to handle multiple notes at once
-		// utilizing a simple "Synth" voice which sounds relatively mechanical by default
-		this.synth = new Tone.PolySynth(Tone.Synth, {
-			oscillator: { type: "triangle" },
-			envelope: {
-				attack: 0.01,
-				decay: 0.1,
-				sustain: 0.1,
-				release: 1
-			}
-		}).toDestination();
+        // Calculate Scale and Duration
+        let maxEndTime = 0;
+        
+        this.notes = songObj.notes.map(n => {
+            const scaledStart = n.startTime / speedMultiplier;
+            const scaledEnd = n.endTime / speedMultiplier;
+            
+            if (scaledEnd > maxEndTime) maxEndTime = scaledEnd;
 
-		// Volume adjustment
-		this.synth.volume.value = -10;
-	}
+            return {
+                ...n,
+                scaledStart: scaledStart,
+                scaledEnd: scaledEnd,
+                // Tone.js duration
+                scaledDuration: scaledEnd - scaledStart,
+                // Map the key index to the actual pitch string (e.g. "C4")
+                pitch: this.keys[n.key] 
+            };
+        });
 
+        this.totalDuration = maxEndTime + 2.0; 
+        console.log(`Song loaded: ${this.totalDuration.toFixed(2)}s`);
 
-	/**
-	 * Loads the song object, parses time, schedules audio.
-	 */
-	async load(songObj) {
+        // Schedule Tone.js
+        Tone.Transport.cancel();
+        Tone.Transport.loop = true;
+        Tone.Transport.loopStart = 0;
+        Tone.Transport.loopEnd = this.totalDuration;
 
-		// Stop any current playback
-		this.stop();
+        this.notes.forEach(note => {
+            Tone.Transport.schedule((time) => {
+                // Trigger the sample
+                // We use a fixed duration or let the sample ring out?
+                // Usually triggerAttack is better for samples if we want them to ring naturally,
+                // but triggerAttackRelease works if we want to choke them (not typical for music box).
+                // Let's use triggerAttackRelease but with a long release in the constructor.
+                this.sampler.triggerAttackRelease(note.pitch, 1.0, time);
+            }, note.scaledStart);
+        });
+    }
 
-		// 1. Store basic data
-		this.keys = songObj.keys;
-		const speedMultiplier = songObj.speed || 1.0;
+    async play() {
+        if (!this.notes.length) return;
+        await Tone.start();
+        
+        // Ensure sampler is loaded before playing to avoid silence
+        if(!this.sampler.loaded) {
+            console.log("Waiting for sample to load...");
+            await Tone.loaded();
+        }
 
-		// 2. Process Notes & Determine Duration
-		// We clone and scale the notes based on speed
-		let maxEndTime = 0;
+        Tone.Transport.start();
+        this.isPlaying = true;
+        this.animationLoop();
+    }
 
-		this.notes = songObj.notes.map(n => {
-			const scaledStart = n.startTime / speedMultiplier;
-			const scaledEnd = n.endTime / speedMultiplier;
+    pause() {
+        Tone.Transport.pause();
+        this.isPlaying = false;
+        if (this.rafId) cancelAnimationFrame(this.rafId);
+    }
 
-			if (scaledEnd > maxEndTime) maxEndTime = scaledEnd;
+    stop() {
+        Tone.Transport.stop();
+        this.isPlaying = false;
+        if (this.rafId) cancelAnimationFrame(this.rafId);
+        this.emitFrameData(0);
+    }
 
-			return {
-				...n,
-				scaledStart: scaledStart,
-				scaledEnd: scaledEnd,
-				scaledDuration: scaledEnd - scaledStart,
-				pitch: this.keys[n.key] // Map index to string pitch (e.g., "C4")
-			};
-		});
+    onPlayData(fn) {
+        this.onPlayDataCallback = fn;
+    }
 
-		// Add a small buffer to the end so the loop isn't jarring
-		this.totalDuration = maxEndTime + 2.0;
+    animationLoop() {
+        if (!this.isPlaying) return;
+        this.emitFrameData(Tone.Transport.seconds);
+        this.rafId = requestAnimationFrame(() => this.animationLoop());
+    }
 
-		console.log(`Song "${songObj.songName}" loaded. Duration: ${this.totalDuration.toFixed(2)}s`);
+    emitFrameData(currentSeconds) {
+        if (!this.onPlayDataCallback) return;
 
-		// 3. Schedule Tone.js
-		// Clear previous schedule
-		Tone.Transport.cancel();
+        const wrappedTime = currentSeconds % this.totalDuration;
+        const normalizedTime = wrappedTime / this.totalDuration;
+        const morphTargets = [];
+        const rampWindow = this.rampDurationSeconds;
 
-		// Set Loop bounds
-		Tone.Transport.loop = true;
-		Tone.Transport.loopStart = 0;
-		Tone.Transport.loopEnd = this.totalDuration;
+        for (let i = 0; i < 18; i++) {
+            let val = 0.0;
+            
+            // Look ahead logic
+            let upcomingNote = this.notes.find(n => {
+                return n.key === i && 
+                       n.scaledStart > wrappedTime && 
+                       n.scaledStart < (wrappedTime + rampWindow);
+            });
 
-		// Schedule individual notes
-		this.notes.forEach(note => {
-			Tone.Transport.schedule((time) => {
-				this.synth.triggerAttackRelease(note.pitch, note.scaledDuration, time);
-			}, note.scaledStart);
-		});
-	}
+            // Loop wrap logic
+            if (!upcomingNote) {
+                if (wrappedTime > (this.totalDuration - rampWindow)) {
+                    upcomingNote = this.notes.find(n => {
+                        const effectiveStart = n.scaledStart + this.totalDuration;
+                        return n.key === i && 
+                               effectiveStart > wrappedTime && 
+                               effectiveStart < (wrappedTime + rampWindow);
+                    });
+                }
+            }
 
+            if (upcomingNote) {
+                let timeUntilHit;
+                if (upcomingNote.scaledStart < wrappedTime) {
+                    timeUntilHit = (upcomingNote.scaledStart + this.totalDuration) - wrappedTime;
+                } else {
+                    timeUntilHit = upcomingNote.scaledStart - wrappedTime;
+                }
+                val = 1.0 - (timeUntilHit / rampWindow);
+                val = Math.max(0, Math.min(1, val));
+            }
 
-	/**
-	 * Start Playback
-	 */
-	async play() {
-		if (!this.songData && this.notes.length === 0) {
-			console.warn("No song loaded.");
-			return;
-		}
+            morphTargets.push({ name: `Key ${i + 1}`, value: val });
+        }
 
-		// Tone.js requires a user interaction to start the audio context
-		await Tone.start();
-
-		Tone.Transport.start();
-		this.isPlaying = true;
-
-		// Start the visual loop
-		this.animationLoop();
-	}
-
-
-	/**
-	 * Pause Playback
-	 */
-	pause() {
-		Tone.Transport.pause();
-		this.isPlaying = false;
-		if (this.rafId) cancelAnimationFrame(this.rafId);
-	}
-
-
-	/**
-	 * Stop and Rewind
-	 */
-	stop() {
-		Tone.Transport.stop();
-		this.isPlaying = false;
-		if (this.rafId) cancelAnimationFrame(this.rafId);
-
-		// Emit a reset frame so visuals snap back
-		this.emitFrameData(0);
-	}
-
-
-	/**
-	 * Set callback for visual updates
-	 */
-	onPlayData(fn) {
-		this.onPlayDataCallback = fn;
-	}
-
-
-	/**
-	 * Internal Animation Loop (Visuals)
-	 * Runs on requestAnimationFrame to stay synced with screen refresh
-	 */
-	animationLoop() {
-
-		if (!this.isPlaying)
-			return;
-
-		// Get current time from Tone.Transport (the source of truth)
-		const currentSeconds = Tone.Transport.seconds;
-
-		this.emitFrameData(currentSeconds);
-
-		this.rafId = requestAnimationFrame(() => this.animationLoop());
-	}
-
-
-	/**
-	 * Calculates state of all keys and emits data
-	 */
-	emitFrameData(currentSeconds) {
-		
-		if (!this.onPlayDataCallback) return;
-
-		// 1. Calculate Normalized Time
-		const wrappedTime = currentSeconds % this.totalDuration;
-		const normalizedTime = wrappedTime / this.totalDuration;
-
-		// 2. Calculate Morph Targets
-		const morphTargets = [];
-		const rampWindow = this.rampDurationSeconds; // e.g. 0.1
-
-		for (let i = 0; i < 18; i++) {
-
-			let val = 0.0;
-
-			// Find a note on this key that is IN THE FUTURE, 
-			// but closing in within the ramp window.
-
-			// Standard Case: Note is directly ahead
-			let upcomingNote = this.notes.find(n => {
-				return n.key === i &&
-					n.scaledStart > wrappedTime &&
-					n.scaledStart < (wrappedTime + rampWindow);
-			});
-
-			// Loop Wrap Case: We are at end of song, Note is at start
-			if (!upcomingNote) {
-				if (wrappedTime > (this.totalDuration - rampWindow)) {
-					upcomingNote = this.notes.find(n => {
-						const effectiveStart = n.scaledStart + this.totalDuration;
-						return n.key === i &&
-							effectiveStart > wrappedTime &&
-							effectiveStart < (wrappedTime + rampWindow);
-					});
-				}
-			}
-
-			if (upcomingNote) {
-				// Calculate how far away the hit is
-				let timeUntilHit;
-
-				if (upcomingNote.scaledStart < wrappedTime) {
-					// Wrap case calculation
-					timeUntilHit = (upcomingNote.scaledStart + this.totalDuration) - wrappedTime;
-				} else {
-					// Standard calculation
-					timeUntilHit = upcomingNote.scaledStart - wrappedTime;
-				}
-
-				// If timeUntilHit is 0.1 (start of ramp), val is 0.
-				// If timeUntilHit is 0.001 (right before note), val is ~1.
-				val = 1.0 - (timeUntilHit / rampWindow);
-				val = Math.max(0, Math.min(1, val));
-			}
-
-			// If no upcoming note is found (or we just passed it), 
-			// val defaults to 0.0, creating the instant snap.
-
-			morphTargets.push({
-				name: `Key ${i + 1}`,
-				value: val
-			});
-		}
-
-		this.onPlayDataCallback({
-			time: normalizedTime,
-			morphTargets: morphTargets
-		});
-	}
-
+        this.onPlayDataCallback({
+            time: normalizedTime,
+            morphTargets: morphTargets
+        });
+    }
 }
