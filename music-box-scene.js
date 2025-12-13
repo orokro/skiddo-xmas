@@ -101,10 +101,17 @@ export class MusicBoxScene {
         });
 
         manager.onLoad = () => {
-            console.log("ThreeJS Scene Loaded.");
+            console.log("ThreeJS Scene Loaded. Waiting 1s for stability...");
             this.isLoaded = true;
             this.state = 'IDLE';
-            this.onSceneReady();
+
+            setTimeout(() => {
+                console.log("Initializing Scene Data...");
+                // 1. Force the drum/gears to appear by running one frame update
+                this.handleFrameData({ time: 0, morphTargets: [] });
+                // 2. Now it is safe to fire the callback
+                this.onSceneReady();
+            }, 1000);
         };
     }
     
@@ -114,6 +121,7 @@ export class MusicBoxScene {
             return;
         }
 
+        // Cleanup old
         this.generatedPegs.forEach(p => {
             if (p.parent) p.parent.remove(p);
         });
@@ -162,6 +170,7 @@ export class MusicBoxScene {
                     case 'refStartPos': this.$.refStartPos = obj; break;
                     case 'refEndPos':   this.$.refEndPos = obj; break;
                     case 'refFocus':    this.$.refFocus = obj; break;
+                    case 'refFocusEnd': this.$.refFocusEnd = obj; break; // NEW
                     case 'BlackoutWall':this.$.blackoutWall = obj; break;
                     case 'WindKey':     this.$.windKey = obj; break;
                     case 'Wall':        this.$.wall = obj; break;
@@ -210,6 +219,7 @@ export class MusicBoxScene {
             this.$.tableCloth.visible = true;
         }
 
+        // Force initial visibility
         const parts = [this.$.drum, this.$.smallGears, this.$.flyWeight];
         parts.forEach(p => { 
             if(p) { 
@@ -371,36 +381,72 @@ export class MusicBoxScene {
 
     _initCameraLerpValues() {
         if (!this.$.refStartPos || !this.$.refEndPos || !this.$.refFocus) {
-             this.camLerp = { start: new THREE.Vector3(), end: new THREE.Vector3(), focus: new THREE.Vector3() };
+             this.camLerp = { start: new THREE.Vector3(), end: new THREE.Vector3(), focusStart: new THREE.Vector3(), focusEnd: new THREE.Vector3() };
              return;
         }
+        
         const startPos = new THREE.Vector3();
         const endPos = new THREE.Vector3();
-        const focusPos = new THREE.Vector3();
+        const focusStart = new THREE.Vector3();
+        const focusEnd = new THREE.Vector3(); // NEW
+
         this.$.refStartPos.getWorldPosition(startPos);
         this.$.refEndPos.getWorldPosition(endPos);
-        this.$.refFocus.getWorldPosition(focusPos);
-        this.camLerp = { start: startPos, end: endPos, focus: focusPos };
+        this.$.refFocus.getWorldPosition(focusStart);
+        
+        // Handle new focus end. Fallback to start focus if missing.
+        if (this.$.refFocusEnd) {
+            this.$.refFocusEnd.getWorldPosition(focusEnd);
+        } else {
+            focusEnd.copy(focusStart);
+        }
+
+        this.camLerp = { 
+            start: startPos, 
+            end: endPos, 
+            focusStart: focusStart,
+            focusEnd: focusEnd 
+        };
     }
 
     _updateCameraLerp(t) {
-        const vStart = new THREE.Vector3().subVectors(this.camLerp.start, this.camLerp.focus);
-        const vEnd = new THREE.Vector3().subVectors(this.camLerp.end, this.camLerp.focus);
+        // Position: Interpolate around the START focus (Pivot)
+        // This keeps the arc shape consistent
+        const vStart = new THREE.Vector3().subVectors(this.camLerp.start, this.camLerp.focusStart);
+        const vEnd = new THREE.Vector3().subVectors(this.camLerp.end, this.camLerp.focusStart);
+        
         const startDist = vStart.length();
         const endDist = vEnd.length();
         const currentDist = THREE.MathUtils.lerp(startDist, endDist, t);
+        
         const vCurrent = new THREE.Vector3().lerpVectors(vStart, vEnd, t).normalize();
         vCurrent.multiplyScalar(currentDist);
-        const finalPos = vCurrent.add(this.camLerp.focus);
+        
+        const finalPos = vCurrent.add(this.camLerp.focusStart);
         this.camera.position.copy(finalPos);
-        this.camera.lookAt(this.camLerp.focus);
+
+        // Rotation: Interpolate the LookAt Target
+        // From refFocus -> refFocusEnd
+        const currentLookAt = new THREE.Vector3().lerpVectors(
+            this.camLerp.focusStart, 
+            this.camLerp.focusEnd, 
+            t
+        );
+        
+        this.camera.lookAt(currentLookAt);
     }
 
     _enableControls() {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        if (this.$.refFocus) {
+        
+        // Target the FINAL focus point so interaction feels centered correctly
+        if (this.$.refFocusEnd) {
+            const focusVec = new THREE.Vector3();
+            this.$.refFocusEnd.getWorldPosition(focusVec);
+            this.controls.target.copy(focusVec);
+        } else if (this.$.refFocus) {
             const focusVec = new THREE.Vector3();
             this.$.refFocus.getWorldPosition(focusVec);
             this.controls.target.copy(focusVec);
