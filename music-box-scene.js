@@ -476,6 +476,16 @@ export class MusicBoxScene {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
+
+        // --- CAMERA LIMITS ---
+        // Horizontal: -1.7 (Left) to 1.7 (Right)
+        this.controls.minAzimuthAngle = -1.7;
+        this.controls.maxAzimuthAngle = 1.7;
+
+        // Vertical: 0 (Top-down) to 1.5 (Almost horizon level)
+        this.controls.minPolarAngle = 0;
+        this.controls.maxPolarAngle = 1.5;
+        // ---------------------
         
         if (this.$.refFocusEnd) {
             const focusVec = new THREE.Vector3();
