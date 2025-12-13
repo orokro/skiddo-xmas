@@ -115,6 +115,13 @@ export class MusicBoxScene {
         manager.onLoad = () => {
             console.log("ThreeJS Scene Loaded.");
             this.isLoaded = true;
+
+            // --- FIX FOR INVISIBLE OBJECTS ---
+            // Spoof an initial frame at time 0. This forces the drum, gears, 
+            // and flywheel to update their positions/matrices immediately
+            // so they are visible before the music starts.
+            this.handleFrameData({ time: 0, morphTargets: [] });
+
             this.state = 'IDLE';
             this.onSceneReady();
         };
@@ -204,6 +211,8 @@ export class MusicBoxScene {
     // --- PUBLIC ---
 
     crank() {
+		this.handleFrameData({ time: 0, morphTargets: [] });
+		
         if (!this.isLoaded) return;
         if (this.isCranking) return; // Ignore clicks if animating
 
@@ -215,9 +224,6 @@ export class MusicBoxScene {
 
         this.crankCount++;
         if (this.crankCount >= 6 && this.state === 'IDLE') {
-            // Wait for animation to finish before scene start? 
-            // Or start immediately? Prompt implies logic: "When crank() is called 6 times..."
-            // We'll trigger start immediately, the crank can keep spinning visually.
             this._startScene();
         }
     }
