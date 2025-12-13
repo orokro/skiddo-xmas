@@ -11,11 +11,9 @@ export class MusicBoxScene {
         this.onReadyForPegs = options.onReadyForPegs || (() => {}); 
         this.initialScale = options.initialScale || 1.0;
 
-        // URL Params
         const urlParams = new URLSearchParams(window.location.search);
         this.autoOpen = urlParams.get('autoOpen') === 'true';
 
-        // State
         this.$ = {}; 
         this.generatedPegs = []; 
         this.responsePlanes = []; 
@@ -25,7 +23,6 @@ export class MusicBoxScene {
         this.isCranking = false;
         this.crankTargetRot = 0;
         
-        // Animation States
         this.state = 'LOADING'; 
         this.animStartTime = 0;
         this.playStartTime = 0;
@@ -75,18 +72,12 @@ export class MusicBoxScene {
         this._tick();
     }
 
-    // --- INTERACTION ---
-
-    // Public method for UI button
     toggle() {
         if (this.state === 'PLAYING') {
             this._triggerClose();
         } else if (this.state === 'PAUSED' || this.state === 'WAIT_FOR_OPEN' || this.state === 'WAIT_DELAY') {
-            // Force peg build if we skipped the normal flow
-            if (this.generatedPegs.length === 0) {
-                 this.onReadyForPegs();
-            }
-            // Hide swipe UI if we toggled manually
+            if (this.generatedPegs.length === 0) this.onReadyForPegs();
+            
             const zone = document.getElementById('swipe-zone');
             if(zone) zone.style.display = 'none';
 
@@ -305,7 +296,8 @@ export class MusicBoxScene {
         this.isCranking = true;
         this.crankCount++;
         
-        if (this.crankCount >= 6 && this.state === 'IDLE') {
+        // Changed to 4
+        if (this.crankCount >= 4 && this.state === 'IDLE') {
             this._startScene();
         }
     }
@@ -378,16 +370,12 @@ export class MusicBoxScene {
 
             if (progress >= 1.0) {
                 this.handleFrameData({ time: 0, morphTargets: [] });
-                // We DON'T toggle open here yet, we wait for swipe/auto
-                
                 if (this.autoOpen) {
-                    // Auto: Go straight to open
-                    this.onReadyForPegs(); // Build pegs now
+                    this.onReadyForPegs(); 
                     this.state = 'OPENING_LID';
                     this.animStartTime = now;
                     this._enableControls();
                 } else {
-                    // Manual: Wait a sec, then enable swipe UI
                     this.state = 'WAIT_DELAY';
                     this.animStartTime = now; 
                 }
@@ -399,16 +387,14 @@ export class MusicBoxScene {
              if (elapsed > 1.0) {
                  this.state = 'WAIT_FOR_OPEN';
                  this._enableControls();
-                 // Show Swipe Prompt
                  const zone = document.getElementById('swipe-zone');
                  if(zone) zone.style.display = 'block';
-                 // We build pegs now so they are ready when user swipes
                  this.onReadyForPegs();
              }
         }
 
         else if (this.state === 'WAIT_FOR_OPEN') {
-            // Waiting for swipe interaction...
+            // Waiting...
         }
 
         else if (this.state === 'OPENING_LID') {
@@ -423,7 +409,6 @@ export class MusicBoxScene {
             if (progress >= 1.0) {
                 this.state = 'PLAYING';
                 this.onMusicPlay();
-                // Reset play timer if we are starting fresh
                 if (this.playStartTime === 0) this.playStartTime = now;
             }
         }

@@ -30,15 +30,45 @@
         }
         #btn-crank:active { cursor: grabbing; }
 
+        /* Crank Prompt (Rotating Arrow) */
+        #crank-prompt {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px; height: 100px;
+            pointer-events: none;
+            z-index: 12;
+            opacity: 0;
+            transition: opacity 0.5s;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        /* SVG Circle Arrow */
+        .rotate-icon {
+            width: 60px; height: 60px;
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.8);
+            stroke-width: 4;
+            stroke-linecap: round;
+            filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
+            animation: spinPrompt 2s infinite linear;
+        }
+
+        @keyframes spinPrompt {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
         /* Full Screen Swipe Zone */
         #swipe-zone {
             position: absolute;
             top: 0; left: 0;
             width: 100vw; height: 100vh;
             z-index: 15;
-            display: none; /* Hidden by default */
+            display: none; 
             cursor: n-resize;
-            /* Background gradient to hint at interaction */
             background: linear-gradient(to top, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 20%);
         }
 
@@ -74,7 +104,6 @@
             100% { transform: translateX(-50%) translateY(-40px); opacity: 0; }
         }
 
-        /* Bottom Right Controls */
         #controls-box {
             position: absolute;
             bottom: 20px; right: 20px;
@@ -87,7 +116,7 @@
             color: #ccc;
             font-size: 12px;
             text-align: right;
-            display: none; /* Hidden until open */
+            display: none; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.5);
         }
 
@@ -108,7 +137,6 @@
         }
         #btn-toggle:hover { background: #666; }
 
-        /* CTA Top Right */
         #btn-cta {
             position: absolute;
             top: 20px; right: 20px;
@@ -139,6 +167,12 @@
     
     <button id="btn-crank" disabled title="Click to wind"></button>
 
+    <div id="crank-prompt">
+        <svg class="rotate-icon" viewBox="0 0 24 24">
+            <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+        </svg>
+    </div>
+
     <div id="swipe-zone">
         <div id="swipe-arrow"></div>
         <div id="swipe-text">Swipe Up to Open</div>
@@ -162,10 +196,6 @@
 
         const crankSound = new Audio('assets/crank.wav');
 
-        // --- 1. SONG DATA (Gymnopédie-ish) ---
-        // Range: G3 (0) to C6 (17)
-        // keys: ["G3","A3","B3","C4","D4","E4","F4","G4","A4","B4","C5","D5","E5","F5","G5","A5","B5","C6"]
-        
         const rawNotes = [
             {t:0.0, k:3}, {t:0.0, k:5}, {t:0.0, k:7}, {t:0.0, k:9}, {t:0.0, k:11}, 
             {t:0.0, k:11}, {t:0.51, k:11}, {t:1.02, k:11}, {t:1.54, k:11}, {t:2.05, k:11}, 
@@ -200,18 +230,19 @@
         
         const song = { 
             songName: "Atmospheric Memory", 
-            speed: 1, 
+            speed: 1.0, // Back to 1.0
             keys: keys, 
             notes: fullNotes 
         };
 
-        // --- 2. INITIALIZE ---
-        
         const player = new MusicBoxPlayer({ rampTime: 0.1 }); 
         const btnCrank = document.getElementById('btn-crank');
         const btnCTA = document.getElementById('btn-cta');
         const controlsBox = document.getElementById('controls-box');
         const btnToggle = document.getElementById('btn-toggle');
+        const crankPrompt = document.getElementById('crank-prompt');
+
+        let promptTimer = null;
 
         const scene = new MusicBoxScene({
             initialScale: 1.0, 
@@ -220,6 +251,13 @@
                 console.log("Scene Ready.");
                 btnCrank.disabled = false; 
                 player.load(song, { collisionThreshold: 0.2 });
+
+                // Start timer for crank hint (8s)
+                promptTimer = setTimeout(() => {
+                    if (!btnCrank.disabled && scene.crankCount === 0) {
+                        crankPrompt.style.opacity = 1;
+                    }
+                }, 8000);
             },
 
             onReadyForPegs: () => {
@@ -229,8 +267,9 @@
 
             onMusicPlay: () => {
                 btnCrank.style.display = 'none'; 
+                crankPrompt.style.display = 'none'; // Ensure prompt is gone
                 btnCTA.style.display = 'block'; 
-                controlsBox.style.display = 'block'; // Show controls
+                controlsBox.style.display = 'block'; 
                 btnToggle.innerText = "Pause / Close Box";
                 
                 if(!player.isPlaying) player.play();
@@ -246,18 +285,21 @@
             scene.handleFrameData(data);
         });
 
-        // --- INTERACTION WIRING ---
-
-        // Crank Button
         btnCrank.onclick = () => {
             if (scene.isCranking) return;
+
+            // Clear Prompt
+            if (promptTimer) clearTimeout(promptTimer);
+            crankPrompt.style.opacity = 0;
+
             crankSound.currentTime = 0;
             crankSound.play().catch(e => console.warn("Audio play failed", e));
             scene.crank();
-            if(scene.crankCount >= 6) btnCrank.disabled = true;
+            
+            // Reduced to 4
+            if(scene.crankCount >= 4) btnCrank.disabled = true;
         };
 
-        // Toggle Button (In Controls Box)
         btnToggle.onclick = () => {
             scene.toggle();
         };
