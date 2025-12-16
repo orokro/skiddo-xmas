@@ -30,7 +30,7 @@
         }
         #btn-crank:active { cursor: grabbing; }
 
-        /* Crank Prompt (Rotating Arrow) */
+        /* Crank Prompt */
         #crank-prompt {
             position: absolute;
             top: 50%; left: 50%;
@@ -38,7 +38,7 @@
             width: 100px; height: 100px;
             pointer-events: none;
             z-index: 12;
-            opacity: 0; /* Hidden by default */
+            opacity: 0;
             transition: opacity 0.5s;
             display: flex;
             justify-content: center;
@@ -60,7 +60,7 @@
             100% { transform: rotate(360deg); }
         }
 
-        /* Full Screen Swipe Zone */
+        /* Swipe UI */
         #swipe-zone {
             position: absolute;
             top: 0; left: 0;
@@ -119,13 +119,48 @@
             text-align: right;
             display: none; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            min-width: 220px;
         }
 
-        .instruction { margin-bottom: 10px; line-height: 1.4; }
+        .instruction { margin-bottom: 15px; line-height: 1.5; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; }
         .mouse-icon { font-weight: bold; color: #fff; }
 
+        /* Song Switcher Row */
+        .song-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 6px;
+            padding: 4px;
+        }
+
+        #song-label {
+            color: #fff;
+            font-weight: bold;
+            font-size: 13px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+            max-width: 120px;
+            text-align: center;
+        }
+
+        .btn-mini {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: white;
+            width: 24px; height: 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .btn-mini:hover { background: rgba(255,255,255,0.3); }
+
         #btn-toggle {
-            padding: 8px 16px;
+            padding: 10px 16px;
             font-size: 14px;
             font-weight: bold;
             background: #444;
@@ -178,9 +213,17 @@
 
     <div id="controls-box">
         <div class="instruction">
-            <span class="mouse-icon">Left Click + Drag</span> to Rotate<br>
-            <span class="mouse-icon">Right Click + Drag</span> to Move
+            <span class="mouse-icon">Left Drag</span> to Rotate<br>
+            <span class="mouse-icon">Right Drag</span> to Move<br>
+            <span class="mouse-icon">Scroll</span> to Zoom
         </div>
+        
+        <div class="song-controls">
+            <button class="btn-mini" id="btn-prev">◀</button>
+            <span id="song-label">Loading...</span>
+            <button class="btn-mini" id="btn-next">▶</button>
+        </div>
+
         <button id="btn-toggle">Pause / Close Box</button>
     </div>
 
@@ -191,7 +234,13 @@
     <script type="module">
         import { MusicBoxPlayer } from './music-box-player.js';
         import { MusicBoxScene } from './music-box-scene.js';
-        import { song } from './song.js'; // IMPORTED SONG
+        
+        // --- MULTIPLE SONGS ---
+        import { song as song1 } from './song.js';  // Atmospheric Memory
+        import { song as song2 } from './song2.js'; // VisiPiano (Black MIDI)
+
+        const songList = [song1, song2];
+        let currentSongIndex = 0;
 
         const crankSound = new Audio('assets/crank.wav');
 
@@ -201,6 +250,11 @@
         const controlsBox = document.getElementById('controls-box');
         const btnToggle = document.getElementById('btn-toggle');
         const crankPrompt = document.getElementById('crank-prompt');
+        
+        // New Controls
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+        const songLabel = document.getElementById('song-label');
 
         let promptTimer = null;
 
@@ -210,11 +264,12 @@
             onSceneReady: () => {
                 console.log("Scene Ready.");
                 btnCrank.disabled = false; 
-                player.load(song, { collisionThreshold: 0.2 });
+                
+                // Initial Load
+                loadSong(0);
 
                 // --- INACTIVITY TIMER (8s) ---
                 promptTimer = setTimeout(() => {
-                    // Only show if button enabled and no cranks happened
                     if (!btnCrank.disabled && scene.crankCount === 0) {
                         crankPrompt.style.opacity = 1;
                     }
@@ -222,6 +277,7 @@
             },
 
             onReadyForPegs: () => {
+                // When scene asks for pegs, give current song data
                 const pegData = player.getSongData();
                 scene.buildPegs(pegData);
             },
@@ -246,10 +302,39 @@
             scene.handleFrameData(data);
         });
 
+        // --- SONG SWITCHING LOGIC ---
+        async function loadSong(index) {
+            // Wrap index
+            if (index < 0) index = songList.length - 1;
+            if (index >= songList.length) index = 0;
+            currentSongIndex = index;
+
+            const targetSong = songList[currentSongIndex];
+            songLabel.innerText = targetSong.songName;
+
+            // Load into player (this stops playback automatically)
+            await player.load(targetSong, { collisionThreshold: 0.2 });
+
+            // If the scene is already running, rebuild pegs immediately
+            if (scene.isLoaded) {
+                const pegData = player.getSongData();
+                scene.buildPegs(pegData);
+            }
+
+            // If the box is currently open ("PLAYING"), restart playback automatically
+            if (scene.state === 'PLAYING') {
+                player.play();
+            }
+        }
+
+        // --- BINDINGS ---
+
+        btnPrev.onclick = () => loadSong(currentSongIndex - 1);
+        btnNext.onclick = () => loadSong(currentSongIndex + 1);
+
         btnCrank.onclick = () => {
             if (scene.isCranking) return;
 
-            // Clear Prompt immediately
             if (promptTimer) clearTimeout(promptTimer);
             crankPrompt.style.opacity = 0;
 
@@ -258,7 +343,6 @@
             
             scene.crank();
             
-            // Reduced to 4 cranks max
             if(scene.crankCount >= 4) {
                 btnCrank.disabled = true;
             }
