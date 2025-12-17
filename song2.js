@@ -213,7 +213,7 @@ processedNotes.sort((a, b) => a.startTime - b.startTime);
 
 // Export Final Object
 export const song = { 
-    songName: "VisiPiano", 
+    songName: "Pitched Down", 
     speed: 0.75, 
     keys: keys, 
     notes: processedNotes 
