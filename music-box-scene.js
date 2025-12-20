@@ -200,6 +200,7 @@ export class MusicBoxScene {
         root.traverse((obj) => {
             if (obj.isMesh || obj.isObject3D) {
                 switch(obj.name) {
+					case 'Outdoors':    this.$.outdoors = obj; break;
                     case 'refStartPos': this.$.refStartPos = obj; break;
                     case 'refEndPos':   this.$.refEndPos = obj; break;
                     case 'refFocus':    this.$.refFocus = obj; break;
@@ -278,6 +279,9 @@ export class MusicBoxScene {
         
         if (this.$.windKey) this.crankTargetRot = this.$.windKey.rotation.z; 
 
+		// Initialize Snow
+        this._initSnow(); // <--- ADD THIS
+
         if (this.$.refStartPos && this.$.refFocus) {
             const startVec = new THREE.Vector3();
             const focusVec = new THREE.Vector3();
@@ -330,7 +334,9 @@ export class MusicBoxScene {
         this.lastFrameTime = now;
         
         this._updateCrankAnimation(dt);
-        
+		
+		this._updateSnow(dt);
+
         this.renderer.render(this.scene, this.camera);
         
         if (this.state === 'IDLE' || this.state === 'LOADING') return;
@@ -513,4 +519,120 @@ export class MusicBoxScene {
             this.controls.target.copy(v);
         }
     }
+
+	// --- SNOW SYSTEM ---
+
+    _createSnowTexture() {
+        // Generate a soft circle texture on the fly
+        const canvas = document.createElement('canvas');
+        canvas.width = 32; 
+        canvas.height = 32;
+        const context = canvas.getContext('2d');
+        
+        const grad = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+        
+        context.fillStyle = grad;
+        context.fillRect(0, 0, 32, 32);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
+    }
+
+    _initSnow() {
+        if (!this.$.outdoors) return;
+
+        // 1. Get Bounds
+        const box = new THREE.Box3().setFromObject(this.$.outdoors);
+        this.snowBounds = {
+            min: box.min,
+            max: box.max,
+            width: box.max.x - box.min.x,
+            height: box.max.y - box.min.y,
+            depth: box.max.z - box.min.z
+        };
+
+        // 2. Geometry
+        const particleCount = 1500;
+        const geometry = new THREE.BufferGeometry();
+        const positions = [];
+        const velocities = []; 
+
+        for (let i = 0; i < particleCount; i++) {
+            positions.push(
+                this.snowBounds.min.x + Math.random() * this.snowBounds.width,
+                this.snowBounds.min.y + Math.random() * this.snowBounds.height,
+                this.snowBounds.min.z + Math.random() * this.snowBounds.depth
+            );
+
+            // Reduced drift speed so they don't fly around too wildly
+            velocities.push(
+                (Math.random() - 0.5) * 0.1, // Slower X drift
+                -(0.2 + Math.random() * 0.6), // Fall speed
+                (Math.random() - 0.5) * 0.1  // Slower Z drift
+            );
+        }
+
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('velocity', new THREE.Float32BufferAttribute(velocities, 3));
+
+        // 3. Material (UPDATED)
+        const material = new THREE.PointsMaterial({
+            color: 0x777777, // Grey color prevents blowout
+            size: 0.04,      // ~50% smaller
+            map: this._createSnowTexture(),
+            transparent: true,
+            opacity: 0.8,
+            depthWrite: false, 
+            blending: THREE.AdditiveBlending
+        });
+
+        this.snowSystem = new THREE.Points(geometry, material);
+        this.scene.add(this.snowSystem);
+    }
+
+	_updateSnow(dt) {
+        if (!this.snowSystem || !this.snowBounds) return;
+
+        const positions = this.snowSystem.geometry.attributes.position.array;
+        const velocities = this.snowSystem.geometry.attributes.velocity.array;
+        const bounds = this.snowBounds; // Alias for readability
+
+        for (let i = 0; i < positions.length; i += 3) {
+
+            // Update Position
+            positions[i]     += velocities[i] * dt;     // X
+            positions[i + 1] += velocities[i + 1] * dt; // Y
+            positions[i + 2] += velocities[i + 2] * dt; // Z
+
+            // Wiggle
+            positions[i] += Math.sin(performance.now() * 0.001 + positions[i]) * 0.002;
+
+            // --- BOUNDARY CHECKS (Containment) ---
+
+            // 1. Floor Check (Y axis) - Reset to top
+            if (positions[i + 1] < bounds.min.y) {
+                positions[i + 1] = bounds.max.y;
+            }
+
+            // 2. Wall Checks (X axis) - Wrap around
+            if (positions[i] < bounds.min.x) {
+                positions[i] = bounds.max.x;
+            } else if (positions[i] > bounds.max.x) {
+                positions[i] = bounds.min.x;
+            }
+
+            // 3. Depth Checks (Z axis) - Wrap around
+            // This specifically prevents them from clipping into the room
+            if (positions[i + 2] < bounds.min.z) {
+                positions[i + 2] = bounds.max.z;
+            } else if (positions[i + 2] > bounds.max.z) {
+                positions[i + 2] = bounds.min.z;
+            }
+        }
+
+        this.snowSystem.geometry.attributes.position.needsUpdate = true;
+    }
+
 }
